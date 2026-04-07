@@ -18,6 +18,7 @@ router.post("/message", async (req, res) => {
 
   try {
     const detected = detectIntent(message);
+    console.log("INTENT DEBUG:", detected);
     let contextForOllama = "";
     let savedData = null;
     let intent = detected.intent;
