@@ -1,15 +1,37 @@
+//profileBuilder.js
+
 const { Expense, Saving, Goal, User } = require("../models");
 
 // Builds a lightweight financial profile for a user.
 // This is what gets sent to Ollama — backend calculates, Ollama only explains.
-async function buildFinancialProfile(userId) {
+async function buildFinancialProfile(userId, options = {}) {
   const user = await User.findById(userId);
   const now = new Date();
-  const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+  let startDate;
+  let endDate = now;
 
-  // Current month expenses
-  const expenses = await Expense.find({ userId, date: { $gte: startOfMonth } });
-  const savings = await Saving.find({ userId, date: { $gte: startOfMonth } });
+  if (options.period === "explicit" && typeof options.month === "number") {
+    const year = options.year || now.getFullYear();
+    startDate = new Date(year, options.month, 1);
+    endDate = new Date(year, options.month + 1, 1);
+  } else if (options.period === "last") {
+    const lastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    startDate = new Date(lastMonth.getFullYear(), lastMonth.getMonth(), 1);
+    endDate = new Date(lastMonth.getFullYear(), lastMonth.getMonth() + 1, 1);
+  } else {
+    startDate = new Date(now.getFullYear(), now.getMonth(), 1);
+    endDate = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+  }
+
+  // Interval expenses and savings
+  const expenses = await Expense.find({
+    userId,
+    date: { $gte: startDate, $lt: endDate },
+  });
+  const savings = await Saving.find({
+    userId,
+    date: { $gte: startDate, $lt: endDate },
+  });
   const goals = await Goal.find({ userId, status: "active" });
 
   const monthlySpend = expenses.reduce((sum, e) => sum + e.amount, 0);

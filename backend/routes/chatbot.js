@@ -1,3 +1,5 @@
+//chatbot.js
+
 const express = require("express");
 const router = express.Router();
 const { detectIntent, INTENTS } = require("../services/intentDetector");
@@ -19,6 +21,15 @@ router.post("/message", async (req, res) => {
     let contextForOllama = "";
     let savedData = null;
     let intent = detected.intent;
+    let responseAction = null;
+    let responseActionData = null;
+
+    const profilePeriod =
+      detected.period === "explicit"
+        ? { period: "explicit", month: detected.month, year: detected.year }
+        : detected.period === "last"
+          ? { period: "last" }
+          : { period: "current" };
 
     // ── Route to handler based on intent ──────────────────────────
 
@@ -39,6 +50,7 @@ router.post("/message", async (req, res) => {
           date: detected.date || new Date(),
         });
         savedData = expense;
+        responseAction = "NAVIGATE_EXPENSES";
         const profile = await buildFinancialProfile(userId);
         contextForOllama = `User logged ₹${detected.amount} expense under ${detected.category || "other"}.
 Current month total spending: ₹${profile.monthly_spend}.
@@ -53,21 +65,137 @@ Monthly income: ₹${profile.monthly_income}. Monthly surplus: ₹${profile.mont
           note: message,
         });
         savedData = saving;
+        responseAction = "NAVIGATE_SAVINGS";
         contextForOllama = `User saved ₹${detected.amount}. Note: "${message}". Encourage them briefly.`;
       }
     } else if (intent === INTENTS.CREATE_GOAL) {
       const profile = await buildFinancialProfile(userId);
-      contextForOllama = `User wants to create a savings goal. Message: "${message}"
-Their financial profile: monthly income ₹${profile.monthly_income}, monthly spend ₹${profile.monthly_spend}, surplus ₹${profile.monthly_surplus}.
-Ask them: what is the target amount, what is the deadline, and why do they want this goal.
-If the goal seems achievable with their surplus, tell them so with the numbers. Include action NAVIGATE_GOALS.`;
+      const amount = detected.amount;
+      const deadline = detected.date ? new Date(detected.date) : null;
+      if (!amount) {
+        contextForOllama = `User told the chatbot they want to create a goal but did not give a number. Ask: how much do they want to save, and by when?`;
+      } else {
+        const actualDeadline =
+          deadline ||
+          (() => {
+            const d = new Date();
+            d.setMonth(d.getMonth() + 6);
+            return d;
+          })();
+        const monthsAvailable = Math.max(
+          1,
+          Math.ceil((actualDeadline - new Date()) / (1000 * 60 * 60 * 24 * 30)),
+        );
+        const requiredMonthly = Math.ceil(amount / monthsAvailable);
+        const onTrack = profile.monthly_surplus >= requiredMonthly;
+
+        let title = "Savings Goal";
+        const forMatch = message.match(
+          /(?:for(?:\s+a)?|save\s+for)\s+([a-zA-Z][a-zA-Z\s]{2,30}?)(?:\s+by|\s*$)/i,
+        );
+        if (forMatch)
+          title = forMatch[1].trim().replace(/\b\w/g, (c) => c.toUpperCase());
+
+        const goal = await Goal.create({
+          userId,
+          title,
+          reason: message,
+          targetAmount: amount,
+          savedSoFar: 0,
+          deadline: actualDeadline,
+          monthlyContribution: requiredMonthly,
+          onTrack,
+          status: "active",
+        });
+
+        savedData = goal;
+        responseAction = "NAVIGATE_GOALS";
+        responseActionData = { goalId: goal._id, title };
+
+        contextForOllama = `FACTS: goal created - ${title} for ₹${amount} by ${actualDeadline.toLocaleDateString("en-IN", { month: "long", year: "numeric" })}. months=${monthsAvailable}, required=₹${requiredMonthly}/mo, surplus=₹${profile.monthly_surplus}, onTrack=${onTrack}.
+Confirm to user that goal is created and navigated to Goals page.`;
+      }
+    } else if (intent === INTENTS.GET_TOP_CATEGORY) {
+      const profile = await buildFinancialProfile(userId, profilePeriod);
+
+      let monthLabel;
+      if (profilePeriod.period === "explicit") {
+        const date = new Date(profilePeriod.year, profilePeriod.month, 1);
+        monthLabel = date.toLocaleString("default", {
+          month: "long",
+          year: "numeric",
+        });
+      } else if (profilePeriod.period === "last") {
+        const lastDate = new Date();
+        lastDate.setMonth(lastDate.getMonth() - 1);
+        monthLabel = lastDate.toLocaleString("default", {
+          month: "long",
+          year: "numeric",
+        });
+      } else {
+        const currentDate = new Date();
+        monthLabel = currentDate.toLocaleString("default", {
+          month: "long",
+          year: "numeric",
+        });
+      }
+
+      const topCategory = profile.top_category || "none";
+
+      const replyText =
+        topCategory === "none"
+          ? `I couldn't find any expenses for ${monthLabel}.` +
+            ` Try logging some spending first.`
+          : `Your top spending category for ${monthLabel} is ${topCategory},` +
+            ` with ₹${profile.category_breakdown[topCategory] || 0} spent.`;
+
+      // skip Ollama for deterministic fact answer
+      await ChatHistory.create({ userId, role: "user", message, intent });
+      await ChatHistory.create({
+        userId,
+        role: "bot",
+        message: replyText,
+        intent,
+        action: null,
+      });
+
+      return res.json({
+        reply: replyText,
+        action: null,
+        actionData: {},
+        intent,
+        saved: false,
+      });
     } else if (intent === INTENTS.GET_INSIGHTS) {
-      const profile = await buildFinancialProfile(userId);
-      contextForOllama = `=== USER FINANCIAL PROFILE (pre-calculated) ===
+      const profile = await buildFinancialProfile(userId, profilePeriod);
+
+      let monthLabel;
+      if (profilePeriod.period === "explicit") {
+        const date = new Date(profilePeriod.year, profilePeriod.month, 1);
+        monthLabel = date.toLocaleString("default", {
+          month: "long",
+          year: "numeric",
+        });
+      } else if (profilePeriod.period === "last") {
+        const lastDate = new Date();
+        lastDate.setMonth(lastDate.getMonth() - 1);
+        monthLabel = lastDate.toLocaleString("default", {
+          month: "long",
+          year: "numeric",
+        });
+      } else {
+        const currentDate = new Date();
+        monthLabel = currentDate.toLocaleString("default", {
+          month: "long",
+          year: "numeric",
+        });
+      }
+
+      contextForOllama = `=== ${monthLabel} USER FINANCIAL PROFILE (pre-calculated) ===
 Monthly Income: ₹${profile.monthly_income}
 Monthly Spending: ₹${profile.monthly_spend}
 Top Category: ${profile.top_category} (${profile.top_percent}% of income)
-Savings This Month: ₹${profile.monthly_saved}
+Savings: ₹${profile.monthly_saved}
 Monthly Surplus: ₹${profile.monthly_surplus}
 Active Goals: ${profile.goals_active} (${profile.goals_at_risk} at risk)
 Category Breakdown: ${JSON.stringify(profile.category_breakdown)}
@@ -76,6 +204,7 @@ User asked: "${message}"
 Give a friendly 3-4 sentence summary of how they are doing financially.`;
     } else if (intent === INTENTS.SIMULATE_EMI) {
       const profile = await buildFinancialProfile(userId);
+      responseAction = null; // No navigation for "what if" questions
       let simResult = null;
       try {
         const simRes = await fetch(`${SIMULATION_URL}/simulate/emi`, {
@@ -108,8 +237,80 @@ Explain this simulation result in simple, friendly language. Be direct about whe
 Their surplus is ₹${profile.monthly_surplus}/month. The simulation engine is not running right now.
 Give general advice about whether they should take an EMI based on their surplus.`;
       }
+    } else if (intent === INTENTS.SIMULATE_INVESTMENT) {
+      const profile = await buildFinancialProfile(userId);
+      const amount = detected.amount || 1000;
+      responseAction = null; // No navigation for "what if" questions
+      let simResult = null;
+      try {
+        const simRes = await fetch(`${SIMULATION_URL}/simulate/investment`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            monthly_amount: amount,
+            months: 24,
+            expected_annual_return: 12.0,
+            current_surplus: profile.monthly_surplus,
+          }),
+        });
+        simResult = await simRes.json();
+      } catch {
+        simResult = null;
+      }
+
+      if (simResult) {
+        contextForOllama = `FACTS (pre-calculated hypothetical from simulator):
+- Proposed SIP: ₹${amount}/month × 24 months at 12% annual return
+- Total you would invest: ₹${simResult.total_invested}
+- Estimated future value: ₹${simResult.estimated_value}
+- Projected total gain: ₹${simResult.gain}
+- Affordable? ${simResult.safe ? "YES — within your surplus" : "NO — would exceed surplus"}
+- Impact on surplus: ₹${simResult.impact_on_surplus}/month remaining
+Explain in 2-3 sentences what WILL happen if they start this SIP. Use only these numbers. Use future tense.`;
+      } else {
+        contextForOllama = `User asked about SIP investment of ₹${amount}/month. Message: "${message}"
+Their current surplus is ₹${profile.monthly_surplus}/month. The simulation engine is not running right now.
+Give general advice on whether this SIP amount is feasible based on their surplus.`;
+      }
+    } else if (intent === INTENTS.SIMULATE_EXPENSE_CUT) {
+      const profile = await buildFinancialProfile(userId);
+      const cat = detected.category || profile.top_category;
+      const catAmount = profile.category_breakdown[cat] || 0;
+      responseAction = null; // No navigation for "what if" questions
+      let simResult = null;
+      try {
+        const simRes = await fetch(`${SIMULATION_URL}/simulate/expense-cut`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            category: cat,
+            cut_percent: 20,
+            current_monthly_spend: profile.monthly_spend,
+            category_amount: catAmount,
+            monthly_income: profile.monthly_income,
+          }),
+        });
+        simResult = await simRes.json();
+      } catch {
+        simResult = null;
+      }
+
+      if (simResult) {
+        contextForOllama = `FACTS (pre-calculated from simulator):
+- Category: ${cat}, current spend ₹${catAmount}/month
+- Cut by 20%: saves ₹${simResult.monthly_saving}/month
+- New monthly surplus: ₹${simResult.new_surplus}/month
+- New monthly spend: ₹${simResult.new_monthly_spend}
+- Annual saving: ₹${simResult.annual_saving}
+Explain in 2 sentences what the impact WILL be. Use only these numbers.`;
+      } else {
+        contextForOllama = `User asked about cutting ${cat} spending by 20%. Message: "${message}"
+Current ${cat} spend: ₹${catAmount}/month. The simulation engine is not running.
+Give general advice on the impact of a 20% cut to this category.`;
+      }
     } else if (intent === INTENTS.EXPLAIN_CONCEPT) {
       const profile = await buildFinancialProfile(userId);
+      responseAction = null; // No navigation for concept explanations
       contextForOllama = `User asked: "${message}"
 User type: ${profile.user_type}. Monthly income: ₹${profile.monthly_income}.
 Explain the concept in simple terms relevant to their financial situation.`;
@@ -127,9 +328,32 @@ User asked: "${message}". Summarize their goal progress briefly.`;
       contextForOllama = `User wants financial tips. Tell them to check the Cards section for personalized tips. Include action NAVIGATE_CARDS.`;
     } else {
       // UNKNOWN intent — still give a helpful response
-      const profile = await buildFinancialProfile(userId);
+      const profile = await buildFinancialProfile(userId, profilePeriod);
+
+      let monthLabel;
+      if (profilePeriod.period === "explicit") {
+        const date = new Date(profilePeriod.year, profilePeriod.month, 1);
+        monthLabel = date.toLocaleString("default", {
+          month: "long",
+          year: "numeric",
+        });
+      } else if (profilePeriod.period === "last") {
+        const lastDate = new Date();
+        lastDate.setMonth(lastDate.getMonth() - 1);
+        monthLabel = lastDate.toLocaleString("default", {
+          month: "long",
+          year: "numeric",
+        });
+      } else {
+        const currentDate = new Date();
+        monthLabel = currentDate.toLocaleString("default", {
+          month: "long",
+          year: "numeric",
+        });
+      }
+
       contextForOllama = `User message: "${message}"
-Their profile: ₹${profile.monthly_income} income, ₹${profile.monthly_spend} spending, ₹${profile.monthly_surplus} surplus.
+Their ${monthLabel} profile: ₹${profile.monthly_income} income, ₹${profile.monthly_spend} spending, ₹${profile.monthly_surplus} surplus.
 Respond helpfully. You can help them log expenses, savings, create goals, or answer financial questions.`;
     }
 
@@ -146,15 +370,175 @@ Respond helpfully. You can help them log expenses, savings, create goals, or ans
       action: ollamaResponse.action,
     });
 
+    const finalAction = responseAction || ollamaResponse.action;
+    const finalActionData = responseActionData || ollamaResponse.actionData;
+
     res.json({
       reply: ollamaResponse.reply,
-      action: ollamaResponse.action,
-      actionData: ollamaResponse.actionData,
+      action: finalAction,
+      actionData: finalActionData,
       intent,
       saved: !!savedData,
     });
   } catch (err) {
     console.error("Chatbot error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/chatbot/reels
+router.post("/reels", async (req, res) => {
+  const { userId } = req.body;
+  if (!userId) return res.status(400).json({ error: "userId required" });
+
+  try {
+    const profile = await buildFinancialProfile(userId);
+
+    // Try Ollama first
+    const prompt = `You are a financial advisor generating personalized "reel" cards for a user.
+
+USER PROFILE (use ONLY these real numbers):
+- Monthly income: ₹${profile.monthly_income}
+- Monthly spending: ₹${profile.monthly_spend}
+- Monthly surplus: ₹${profile.monthly_surplus}
+- Top spending category: ${profile.top_category} (${profile.top_percent}% of income)
+- Category breakdown: ${JSON.stringify(profile.category_breakdown)}
+- Savings this month: ₹${profile.monthly_saved}
+- Savings rate: ${profile.savings_rate_percent}%
+- Active goals: ${profile.goals_active}
+- User type: ${profile.user_type}
+- Goals: ${JSON.stringify(profile.goals_list || [])}
+
+Generate exactly 5 personalized financial reel cards. Each must reference their ACTUAL numbers — not generic advice.
+
+Return ONLY a JSON array (no markdown, no explanation):
+[
+  {
+    "id": "r1",
+    "category": "food|savings|investment|budgeting|debt|goals|entertainment|shopping|health",
+    "title": "Short punchy title (max 8 words)",
+    "hook": "One attention-grabbing sentence using their real numbers",
+    "insight": "2 sentences of personalized insight using their exact numbers",
+    "action": "One specific actionable tip they can do today",
+    "stat": "One key number from their data e.g. 42% on food"
+  }
+]
+
+Rules: every card must mention at least one real number. No generic advice. Vary categories. Friendly tone.`;
+
+    const ollamaResponse = await callOllama(prompt);
+    const raw = ollamaResponse.reply || "";
+    const match = raw.match(/\[[\s\S]*\]/);
+    if (match) {
+      try {
+        const reels = JSON.parse(match[0]);
+        const requiredCategories = new Set([
+          "investment",
+          "savings",
+          "budgeting",
+          "goals",
+        ]);
+        const hasCore = reels.some((r) =>
+          requiredCategories.has((r.category || "").toLowerCase()),
+        );
+        if (Array.isArray(reels) && reels.length >= 6 && hasCore) {
+          return res.json({ reels });
+        }
+      } catch (parseErr) {
+        console.error("Ollama JSON parse error:", parseErr);
+      }
+    }
+
+    // Fallback to rule-based generation (explicit categories as requested)
+    const inc = profile.monthly_income || 0;
+    const spend = profile.monthly_spend || 0;
+    const surplus = profile.monthly_surplus || 0;
+    const saved = profile.monthly_saved || 0;
+    const saveRate = profile.savings_rate_percent || 0;
+    const top = profile.top_category || "other";
+    const topPct = profile.top_percent || 0;
+    const topAmt = profile.category_breakdown?.[top] || 0;
+
+    const fallbackReels = [
+      {
+        id: "f1",
+        category: top,
+        title: `${topPct}% of your income goes to ${top}`,
+        hook: `You spent ₹${topAmt.toLocaleString("en-IN")} on ${top} this month alone.`,
+        insight: `The 50/30/20 rule suggests needs should be under 50% of income. Your ${top} spending at ${topPct}% is your biggest opportunity to save more. Even a 20% reduction saves ₹${Math.round(topAmt * 0.2).toLocaleString("en-IN")}/month.`,
+        action: `Set a daily ₹${Math.round((topAmt * 0.8) / 30).toLocaleString("en-IN")} budget for ${top} for the next 7 days.`,
+        stat: `${topPct}% on ${top}`,
+      },
+      {
+        id: "f2",
+        category: "savings",
+        title:
+          saveRate < 20
+            ? "Your savings rate needs work"
+            : "Great savings habit!",
+        hook: `You saved ${saveRate}% of your income — the recommended minimum is 20%.`,
+        insight: `With ₹${inc.toLocaleString("en-IN")} income, 20% savings = ₹${Math.round(inc * 0.2).toLocaleString("en-IN")}/month. You saved ₹${saved.toLocaleString("en-IN")} this month. ${saveRate < 20 ? `That's ₹${Math.round(inc * 0.2 - saved).toLocaleString("en-IN")} short of the target.` : "You are on track!"}`,
+        action: `Transfer ₹${Math.round(surplus * 0.3).toLocaleString("en-IN")} (30% of your surplus) to a savings account right now.`,
+        stat: `${saveRate}% savings rate`,
+      },
+      {
+        id: "f3",
+        category: "investment",
+        title: "Your surplus can work harder",
+        hook: `₹${surplus.toLocaleString("en-IN")} monthly surplus sitting idle is a missed opportunity.`,
+        insight: `Investing ₹${Math.round(surplus * 0.3).toLocaleString("en-IN")}/month (30% of your surplus) in a SIP at 12% annual return gives you ₹${Math.round(Math.round(surplus * 0.3) * 24 * 1.27).toLocaleString("en-IN")} in 2 years — your money growing while you sleep.`,
+        action:
+          "Open a SIP on Groww or Zerodha Coin today. Start with ₹500/month.",
+        stat: `₹${surplus.toLocaleString("en-IN")} surplus/month`,
+      },
+      {
+        id: "f4",
+        category: "budgeting",
+        title: "The 50/30/20 rule for your money",
+        hook: `With ₹${inc.toLocaleString("en-IN")} income, here's what your ideal budget looks like.`,
+        insight: `Needs (50%): ₹${Math.round(inc * 0.5).toLocaleString("en-IN")} | Wants (30%): ₹${Math.round(inc * 0.3).toLocaleString("en-IN")} | Savings (20%): ₹${Math.round(inc * 0.2).toLocaleString("en-IN")}. You're currently spending ₹${spend.toLocaleString("en-IN")} total — ${spend > inc * 0.8 ? "above the recommended 80%." : "within a healthy range."}`,
+        action: "Categorize every expense this week as Need, Want, or Savings.",
+        stat: `₹${inc.toLocaleString("en-IN")} monthly income`,
+      },
+      {
+        id: "f5",
+        category: "goals",
+        title:
+          profile.goals_active > 0
+            ? `${profile.goals_active} goals — let's accelerate`
+            : "No goals yet — start today",
+        hook:
+          profile.goals_active > 0
+            ? `You have ${profile.goals_active} active goal(s). Your surplus can fund them faster.`
+            : "People with written goals are 42% more likely to achieve them.",
+        insight:
+          profile.goals_active > 0
+            ? `With ₹${surplus.toLocaleString("en-IN")} monthly surplus, dedicating 50% (₹${Math.round(surplus * 0.5).toLocaleString("en-IN")}) to your goals means significant progress every month.`
+            : `You currently have ₹${surplus.toLocaleString("en-IN")} in monthly surplus with no goal assigned to it. That money has no direction yet.`,
+        action:
+          profile.goals_active > 0
+            ? "Set up an auto-transfer to your goal every month."
+            : "Go to Goals and create your first savings goal in 60 seconds.",
+        stat:
+          profile.goals_active > 0
+            ? `${profile.goals_active} active goals`
+            : "No goals set",
+      },
+      {
+        id: "f6",
+        category: "debt",
+        title: "Reduce debt risk and keep options open",
+        hook: `If you have existing liabilities, keeping a safe cushion from your ₹${surplus.toLocaleString("en-IN")} surplus shields you from emergencies and stops high-cost debt from building up.`,
+        insight: `Even a small portion of your surplus (₹${Math.round(surplus * 0.2).toLocaleString("en-IN")}/month) can reduce your interest burden and improve your credit profile, which supports smart investments later.`,
+        action:
+          "Review high-interest liabilities and pay down the top 1-2 items first.",
+        stat: "Debt safety plan",
+      },
+    ];
+
+    res.json({ reels: fallbackReels });
+  } catch (err) {
+    console.error("Reels generation error:", err);
     res.status(500).json({ error: err.message });
   }
 });

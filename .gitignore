@@ -24,3 +24,6 @@ npm-debug.log*
 # IDE
 .vscode/settings.json
 .idea/
+
+dist/
+.DS_Store

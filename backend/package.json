@@ -1,7 +1,7 @@
 {
-  "name": "finmind-backend",
+  "name": "finassist-backend",
   "version": "1.0.0",
-  "description": "FinMind AI backend — Node.js + Express + MongoDB",
+  "description": "FinAssist backend — Node.js + Express + MongoDB",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",

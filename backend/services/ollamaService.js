@@ -1,3 +1,5 @@
+//ollamaService.js
+
 const fetch = require("node-fetch");
 
 const OLLAMA_URL = process.env.OLLAMA_URL || "http://localhost:11434";
@@ -17,12 +19,28 @@ STRICT RULES — follow exactly:
 }`;
 
 async function callOllama(userPrompt) {
+  function parseOllamaJson(rawText) {
+    if (!rawText || typeof rawText !== "string") return null;
+
+    // allow response with extra text around JSON and also strict JSON body
+    const jsonMatch = rawText.match(/\{[\s\S]*\}/);
+    const candidate = jsonMatch ? jsonMatch[0] : rawText.trim();
+
+    try {
+      const parsed = JSON.parse(candidate);
+      if (typeof parsed !== "object" || parsed === null) return null;
+      return parsed;
+    } catch (parseErr) {
+      return null;
+    }
+  }
+
   try {
     const response = await fetch(`${OLLAMA_URL}/api/generate`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        model: "mistral",
+        model: process.env.OLLAMA_MODEL || "mistral",
         prompt: SYSTEM_PROMPT + "\n\n" + userPrompt,
         stream: false,
       }),
@@ -35,26 +53,33 @@ async function callOllama(userPrompt) {
     const data = await response.json();
     const raw = data.response || "";
 
-    // Parse JSON from Ollama's response
-    const jsonMatch = raw.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) {
-      return { reply: raw.trim(), action: null, actionData: null };
+    const parsed = parseOllamaJson(raw);
+    if (!parsed || !parsed.reply) {
+      console.warn(
+        "Ollama returned malformed JSON, falling back to plain text reply:",
+        raw,
+      );
+      return {
+        reply:
+          raw.trim() ||
+          "Sorry, I could not interpret the assistant response. Please try again.",
+        action: null,
+        actionData: {},
+      };
     }
 
-    const parsed = JSON.parse(jsonMatch[0]);
     return {
-      reply: parsed.reply || raw,
+      reply: parsed.reply || "",
       action: parsed.action || null,
-      actionData: parsed.actionData || null,
+      actionData: parsed.actionData || {},
     };
   } catch (err) {
     console.error("Ollama error:", err.message);
-    // Fallback so the app doesn't break if Ollama is down
     return {
       reply:
         "I'm having trouble connecting to my AI brain right now. Your data was saved successfully though!",
       action: null,
-      actionData: null,
+      actionData: {},
     };
   }
 }
