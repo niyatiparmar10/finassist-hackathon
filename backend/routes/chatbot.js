@@ -192,6 +192,7 @@ DO NOT hallucinate or change the amount. DO NOT change the year. Use EXACTLY ₹
         saved: false,
       });
     } else if (intent === INTENTS.GET_INSIGHTS) {
+      console.log("[DEBUG] Handling GET_INSIGHTS, period:", profilePeriod);
       const profile = await buildFinancialProfile(userId, profilePeriod);
 
       let monthLabel;
@@ -215,6 +216,43 @@ DO NOT hallucinate or change the amount. DO NOT change the year. Use EXACTLY ₹
         });
       }
 
+      // Call health-check simulation engine for a richer score
+      let healthData = null;
+      try {
+        const healthRes = await fetch(
+          `${SIMULATION_URL}/simulate/health-check`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              monthly_income: profile.monthly_income,
+              avg_monthly_spend:
+                profile.avg_monthly_spend || profile.monthly_spend,
+              current_month_spend: profile.monthly_spend,
+              current_day_of_month: profile.current_day_of_month,
+              total_days_in_month: profile.total_days_in_month,
+              monthly_saved: profile.monthly_saved,
+              total_monthly_commitments: profile.total_monthly_commitments || 0,
+              goals_active: profile.goals_active,
+              historical_months: (profile.historical_months || []).map((m) => ({
+                totalSpend: m.totalSpend,
+                totalIncome: m.totalIncome,
+                totalSaved: m.totalSaved,
+                label: m.label,
+              })),
+            }),
+          },
+        );
+        healthData = await healthRes.json();
+        console.log("[DEBUG] Health check result:", healthData);
+      } catch (err) {
+        console.error("[DEBUG] Health check sim error:", err.message);
+      }
+
+      const healthLine = healthData
+        ? `Financial Health Score: ${healthData.health_score}/100 (${healthData.health_label}). Recommendations: ${healthData.recommendations.join(" | ")}`
+        : "";
+
       contextForOllama = `=== ${monthLabel} USER FINANCIAL PROFILE (pre-calculated) ===
 Monthly Income: ₹${profile.monthly_income}
 Monthly Spending: ₹${profile.monthly_spend}
@@ -223,9 +261,10 @@ Savings: ₹${profile.monthly_saved}
 Monthly Surplus: ₹${profile.monthly_surplus}
 Active Goals: ${profile.goals_active} (${profile.goals_at_risk} at risk)
 Category Breakdown: ${JSON.stringify(profile.category_breakdown)}
+${healthLine}
 
 User asked: "${message}"
-Give a friendly 3-4 sentence summary of how they are doing financially.`;
+Give a friendly 3-4 sentence summary of how they are doing financially. Include the health score if available.`;
     } else if (intent === INTENTS.SIMULATE_EMI) {
       const profile = await buildFinancialProfile(userId);
       responseAction = null;
@@ -331,6 +370,88 @@ Explain in 2 sentences what the impact WILL be. Use only these numbers.`;
         contextForOllama = `User asked about cutting ${cat} spending by 20%. Message: "${message}"
 Current ${cat} spend: ₹${catAmount}/month. The simulation engine is not running.
 Give general advice on the impact of a 20% cut to this category.`;
+      }
+    } else if (intent === INTENTS.SIMULATE_FD) {
+      console.log(
+        "[DEBUG] Handling SIMULATE_FD intent, amount:",
+        detected.amount,
+      );
+      const profile = await buildFinancialProfile(userId);
+      let simResult = null;
+      try {
+        const simRes = await fetch(`${SIMULATION_URL}/simulate/fd`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            principal: detected.amount || 10000,
+            months: 12,
+            annual_rate: 6.5,
+            monthly_surplus: profile.monthly_surplus,
+          }),
+        });
+        simResult = await simRes.json();
+        console.log("[DEBUG] FD sim result:", simResult);
+      } catch (err) {
+        console.error("[DEBUG] FD simulation error:", err.message);
+      }
+
+      if (simResult && !simResult.error) {
+        contextForOllama = `FACTS (FD simulation):
+- Principal: ₹${detected.amount || 10000}
+- Duration: 12 months at 6.5% annual rate (monthly compounding)
+- Maturity amount: ₹${simResult.maturity_amount}
+- Total interest earned: ₹${simResult.total_interest}
+- Safe to lock this amount: ${simResult.safe ? "YES" : "NO"}
+- Recommendation: ${simResult.recommendation}
+Explain this in 2-3 simple sentences. Use only these numbers.`;
+      } else {
+        contextForOllama = `User asked about a Fixed Deposit of ₹${detected.amount}. Message: "${message}"
+Their monthly surplus is ₹${profile.monthly_surplus}. The simulation engine is not available.
+Give general advice about FDs and whether this amount seems feasible.`;
+      }
+    } else if (intent === INTENTS.SIMULATE_MUTUAL_FUND) {
+      console.log(
+        "[DEBUG] Handling SIMULATE_MUTUAL_FUND intent, amount:",
+        detected.amount,
+      );
+      const profile = await buildFinancialProfile(userId);
+      let simResult = null;
+      try {
+        const simRes = await fetch(`${SIMULATION_URL}/simulate/mutual-fund`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            monthly_amount: detected.amount || 1000,
+            months: 36,
+            expected_annual_return: 14.0,
+            fund_type: message.toLowerCase().includes("debt")
+              ? "debt"
+              : message.toLowerCase().includes("balanced")
+                ? "balanced"
+                : "equity",
+            monthly_surplus: profile.monthly_surplus,
+          }),
+        });
+        simResult = await simRes.json();
+        console.log("[DEBUG] MF sim result:", simResult);
+      } catch (err) {
+        console.error("[DEBUG] Mutual fund simulation error:", err.message);
+      }
+
+      if (simResult && !simResult.error) {
+        contextForOllama = `FACTS (Mutual Fund SIP simulation):
+- Monthly SIP: ₹${detected.amount || 1000} for 36 months
+- Expected return: ${simResult.xirr_approx}
+- Total invested: ₹${simResult.total_invested}
+- Estimated value: ₹${simResult.estimated_value}
+- Estimated gain: ₹${simResult.gain}
+- Affordable: ${simResult.safe ? "YES — within surplus" : "NO — exceeds surplus"}
+- Tax note: ${simResult.tax_note}
+Explain this in 2-3 simple sentences. Use only these numbers.`;
+      } else {
+        contextForOllama = `User asked about a Mutual Fund SIP of ₹${detected.amount}/month. Message: "${message}"
+Their surplus is ₹${profile.monthly_surplus}. The simulation engine is not available.
+Give general advice about mutual fund SIPs.`;
       }
     } else if (intent === INTENTS.EXPLAIN_CONCEPT) {
       const profile = await buildFinancialProfile(userId);
