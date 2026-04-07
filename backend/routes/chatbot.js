@@ -581,12 +581,31 @@ router.post("/reels", async (req, res) => {
   const { userId } = req.body;
   if (!userId) return res.status(400).json({ error: "userId required" });
 
+  console.log("[REELS] Generating 15 reels for userId:", userId);
+
   try {
     const profile = await buildFinancialProfile(userId);
 
-    const prompt = `You are a financial advisor generating personalized "reel" cards for a user.
+    // Compute dataHash for cache invalidation
+    const dataHash =
+      String(profile.monthly_income) +
+      String(profile.monthly_spend) +
+      String(profile.goals_active) +
+      String(profile.monthly_saved);
 
-USER PROFILE (use ONLY these real numbers):
+    console.log("[REELS] Profile loaded. dataHash:", dataHash);
+    console.log(
+      "[REELS] Income:",
+      profile.monthly_income,
+      "Spend:",
+      profile.monthly_spend,
+      "Surplus:",
+      profile.monthly_surplus,
+    );
+
+    const prompt = `You are a financial advisor generating personalized reel cards for a user.
+
+USER PROFILE (use ONLY these real numbers for personalized reels):
 - Monthly income: ₹${profile.monthly_income}
 - Monthly spending: ₹${profile.monthly_spend}
 - Monthly surplus: ₹${profile.monthly_surplus}
@@ -597,48 +616,80 @@ USER PROFILE (use ONLY these real numbers):
 - Active goals: ${profile.goals_active}
 - User type: ${profile.user_type}
 - Goals: ${JSON.stringify(profile.goals_list || [])}
+- 3-month avg spend: ₹${Math.round(profile.avg_monthly_spend || 0)}
+- 3-month avg surplus: ₹${Math.round(profile.avg_monthly_surplus || 0)}
 
-Generate exactly 5 personalized financial reel cards. Each must reference their ACTUAL numbers — not generic advice.
+Generate EXACTLY 15 financial reel cards as a JSON array.
 
-Return ONLY a JSON array (no markdown, no explanation):
+REELS 1-10: Personalized reels based on the user's real data above.
+Cover: top spending category analysis, savings rate check, surplus usage, goals progress,
+SIP recommendation for their income, budget analysis (50/30/20), 3-month spending trend,
+EMI affordability check, FD options for their surplus, emergency fund check.
+Each MUST reference their ACTUAL numbers.
+Set "isWorldNews": false for these.
+
+REELS 11-15: World Finance reels — general financial knowledge, NOT user-specific.
+Cover: one about Indian stock market (Nifty/Sensex basics), one about cryptocurrency basics,
+one about compound interest power, one about inflation impact on savings,
+one about tax saving instruments in India (ELSS, PPF, NPS).
+These should feel current and educational.
+Set "isWorldNews": true for these.
+
+Return ONLY a valid JSON array (no markdown, no backticks, no explanation):
 [
   {
     "id": "r1",
-    "category": "food|savings|investment|budgeting|debt|goals|entertainment|shopping|health",
+    "category": "food|savings|investment|budgeting|debt|goals|entertainment|shopping|health|markets|crypto|general",
     "title": "Short punchy title (max 8 words)",
-    "hook": "One attention-grabbing sentence using their real numbers",
-    "insight": "2 sentences of personalized insight using their exact numbers",
-    "action": "One specific actionable tip they can do today",
-    "stat": "One key number from their data e.g. 42% on food"
+    "hook": "One attention-grabbing sentence",
+    "insight": "2 sentences of insight",
+    "action": "One specific actionable tip",
+    "stat": "One key number or fact",
+    "isWorldNews": false
   }
 ]
 
-Rules: every card must mention at least one real number. No generic advice. Vary categories. Friendly tone.`;
+Rules:
+- Personalized reels (1-10) must mention at least one real number from profile.
+- World Finance reels (11-15) should be educational and broadly applicable.
+- Vary categories across all 15.
+- Friendly, conversational tone.
+- Return exactly 15 objects. No more, no less.`;
 
+    console.log("[REELS] Calling Ollama for reel generation...");
     const ollamaResponse = await callOllama(prompt);
     const raw = ollamaResponse.reply || "";
+    console.log("[REELS] Ollama raw response length:", raw.length);
+
     const match = raw.match(/\[[\s\S]*\]/);
     if (match) {
       try {
         const reels = JSON.parse(match[0]);
-        const requiredCategories = new Set([
-          "investment",
-          "savings",
-          "budgeting",
-          "goals",
-        ]);
-        const hasCore = reels.some((r) =>
-          requiredCategories.has((r.category || "").toLowerCase()),
-        );
-        if (Array.isArray(reels) && reels.length >= 5 && hasCore) {
-          return res.json({ reels });
+        console.log("[REELS] Parsed reels count:", reels.length);
+        if (Array.isArray(reels) && reels.length >= 10) {
+          // Ensure isWorldNews field is set correctly
+          const normalizedReels = reels.map((r, i) => ({
+            ...r,
+            id: r.id || `r${i + 1}`,
+            isWorldNews: r.isWorldNews === true,
+          }));
+          console.log(
+            "[REELS] Returning",
+            normalizedReels.length,
+            "AI-generated reels",
+          );
+          return res.json({ reels: normalizedReels, dataHash });
         }
       } catch (parseErr) {
-        console.error("Ollama JSON parse error:", parseErr);
+        console.error("[REELS] JSON parse error:", parseErr.message);
       }
     }
 
-    // Fallback rule-based reels
+    console.warn(
+      "[REELS] Ollama failed or returned < 10 reels, using fallback",
+    );
+
+    // ── Fallback: 15 rule-based reels ──────────────────────────────────────
     const inc = profile.monthly_income || 0;
     const spend = profile.monthly_spend || 0;
     const surplus = profile.monthly_surplus || 0;
@@ -650,48 +701,53 @@ Rules: every card must mention at least one real number. No generic advice. Vary
 
     const fallbackReels = [
       {
-        id: "f1",
+        id: "r1",
         category: top,
-        title: `${topPct}% of your income goes to ${top}`,
+        isWorldNews: false,
+        title: `${topPct}% of your income on ${top}`,
         hook: `You spent ₹${topAmt.toLocaleString("en-IN")} on ${top} this month alone.`,
-        insight: `The 50/30/20 rule suggests needs should be under 50% of income. Your ${top} spending at ${topPct}% is your biggest opportunity to save more. Even a 20% reduction saves ₹${Math.round(topAmt * 0.2).toLocaleString("en-IN")}/month.`,
+        insight: `The 50/30/20 rule says needs should stay under 50% of income. Your ${top} at ${topPct}% is your biggest opportunity. Even a 20% reduction saves ₹${Math.round(topAmt * 0.2).toLocaleString("en-IN")}/month.`,
         action: `Set a daily ₹${Math.round((topAmt * 0.8) / 30).toLocaleString("en-IN")} budget for ${top} for the next 7 days.`,
         stat: `${topPct}% on ${top}`,
       },
       {
-        id: "f2",
+        id: "r2",
         category: "savings",
+        isWorldNews: false,
         title:
           saveRate < 20
             ? "Your savings rate needs work"
             : "Great savings habit!",
-        hook: `You saved ${saveRate}% of your income — the recommended minimum is 20%.`,
-        insight: `With ₹${inc.toLocaleString("en-IN")} income, 20% savings = ₹${Math.round(inc * 0.2).toLocaleString("en-IN")}/month. You saved ₹${saved.toLocaleString("en-IN")} this month. ${saveRate < 20 ? `That's ₹${Math.round(inc * 0.2 - saved).toLocaleString("en-IN")} short of the target.` : "You are on track!"}`,
-        action: `Transfer ₹${Math.round(surplus * 0.3).toLocaleString("en-IN")} (30% of your surplus) to a savings account right now.`,
+        hook: `You saved ${saveRate}% of your income — target is 20%.`,
+        insight: `With ₹${inc.toLocaleString("en-IN")} income, 20% = ₹${Math.round(inc * 0.2).toLocaleString("en-IN")}/month. You saved ₹${saved.toLocaleString("en-IN")}. ${saveRate < 20 ? `That's ₹${Math.round(inc * 0.2 - saved).toLocaleString("en-IN")} short.` : "You're on target!"}`,
+        action: `Transfer ₹${Math.round(surplus * 0.3).toLocaleString("en-IN")} (30% of surplus) to savings right now.`,
         stat: `${saveRate}% savings rate`,
       },
       {
-        id: "f3",
+        id: "r3",
         category: "investment",
+        isWorldNews: false,
         title: "Your surplus can work harder",
-        hook: `₹${surplus.toLocaleString("en-IN")} monthly surplus sitting idle is a missed opportunity.`,
-        insight: `Investing ₹${Math.round(surplus * 0.3).toLocaleString("en-IN")}/month (30% of your surplus) in a SIP at 12% annual return gives you ₹${Math.round(Math.round(surplus * 0.3) * 24 * 1.27).toLocaleString("en-IN")} in 2 years — your money growing while you sleep.`,
+        hook: `₹${surplus.toLocaleString("en-IN")}/month sitting idle is a missed opportunity.`,
+        insight: `Investing ₹${Math.round(surplus * 0.3).toLocaleString("en-IN")}/month (30% of surplus) at 12% annual return gives you ₹${Math.round(Math.round(surplus * 0.3) * 24 * 1.27).toLocaleString("en-IN")} in 2 years.`,
         action:
-          "Open a SIP on Groww or Zerodha Coin today. Start with ₹500/month.",
+          "Start a SIP on Groww or Zerodha Coin. Even ₹500/month compounds beautifully.",
         stat: `₹${surplus.toLocaleString("en-IN")} surplus/month`,
       },
       {
-        id: "f4",
+        id: "r4",
         category: "budgeting",
+        isWorldNews: false,
         title: "The 50/30/20 rule for your money",
-        hook: `With ₹${inc.toLocaleString("en-IN")} income, here's what your ideal budget looks like.`,
-        insight: `Needs (50%): ₹${Math.round(inc * 0.5).toLocaleString("en-IN")} | Wants (30%): ₹${Math.round(inc * 0.3).toLocaleString("en-IN")} | Savings (20%): ₹${Math.round(inc * 0.2).toLocaleString("en-IN")}. You're currently spending ₹${spend.toLocaleString("en-IN")} total — ${spend > inc * 0.8 ? "above the recommended 80%." : "within a healthy range."}`,
+        hook: `With ₹${inc.toLocaleString("en-IN")} income, here's your ideal budget.`,
+        insight: `Needs (50%): ₹${Math.round(inc * 0.5).toLocaleString("en-IN")} | Wants (30%): ₹${Math.round(inc * 0.3).toLocaleString("en-IN")} | Savings (20%): ₹${Math.round(inc * 0.2).toLocaleString("en-IN")}. You're spending ₹${spend.toLocaleString("en-IN")} total — ${spend > inc * 0.8 ? "above the recommended 80%." : "within a healthy range."}`,
         action: "Categorize every expense this week as Need, Want, or Savings.",
         stat: `₹${inc.toLocaleString("en-IN")} monthly income`,
       },
       {
-        id: "f5",
+        id: "r5",
         category: "goals",
+        isWorldNews: false,
         title:
           profile.goals_active > 0
             ? `${profile.goals_active} goals — let's accelerate`
@@ -702,32 +758,139 @@ Rules: every card must mention at least one real number. No generic advice. Vary
             : "People with written goals are 42% more likely to achieve them.",
         insight:
           profile.goals_active > 0
-            ? `With ₹${surplus.toLocaleString("en-IN")} monthly surplus, dedicating 50% (₹${Math.round(surplus * 0.5).toLocaleString("en-IN")}) to your goals means significant progress every month.`
-            : `You currently have ₹${surplus.toLocaleString("en-IN")} in monthly surplus with no goal assigned to it. That money has no direction yet.`,
+            ? `With ₹${surplus.toLocaleString("en-IN")} monthly surplus, dedicating 50% (₹${Math.round(surplus * 0.5).toLocaleString("en-IN")}) to your goals means big progress every month.`
+            : `You have ₹${surplus.toLocaleString("en-IN")} in monthly surplus with no goal assigned. That money has no direction yet.`,
         action:
           profile.goals_active > 0
             ? "Set up an auto-transfer to your goal every month."
-            : "Go to Goals and create your first savings goal in 60 seconds.",
+            : "Create your first savings goal in 60 seconds.",
         stat:
           profile.goals_active > 0
             ? `${profile.goals_active} active goals`
             : "No goals set",
       },
       {
-        id: "f6",
-        category: "debt",
-        title: "Reduce debt risk and keep options open",
-        hook: `If you have existing liabilities, keeping a safe cushion from your ₹${surplus.toLocaleString("en-IN")} surplus shields you from emergencies.`,
-        insight: `Even a small portion of your surplus (₹${Math.round(surplus * 0.2).toLocaleString("en-IN")}/month) can reduce your interest burden and improve your credit profile.`,
+        id: "r6",
+        category: "health",
+        isWorldNews: false,
+        title: "Emergency fund check",
+        hook: `You need 3-6 months of expenses as an emergency fund: ₹${Math.round(spend * 3).toLocaleString("en-IN")}–₹${Math.round(spend * 6).toLocaleString("en-IN")}.`,
+        insight: `An emergency fund prevents you from dipping into investments during crises. At your current spend of ₹${spend.toLocaleString("en-IN")}/month, start by saving ₹${Math.round(spend * 0.5).toLocaleString("en-IN")}/month specifically for emergencies.`,
         action:
-          "Review high-interest liabilities and pay down the top 1-2 items first.",
-        stat: "Debt safety plan",
+          "Open a separate savings account and label it 'Emergency Fund'. Move money there this week.",
+        stat: `Target: ₹${Math.round(spend * 3).toLocaleString("en-IN")}`,
+      },
+      {
+        id: "r7",
+        category: "investment",
+        isWorldNews: false,
+        title: "FD option for your surplus",
+        hook: `A 12-month FD at 7% on ₹${Math.round(surplus * 2).toLocaleString("en-IN")} earns ₹${Math.round(surplus * 2 * 0.07).toLocaleString("en-IN")} interest.`,
+        insight: `Fixed Deposits are risk-free and ideal for money you won't need for 6-12 months. HDFC, SBI, and small finance banks offer 7-8% annually — better than savings accounts.`,
+        action:
+          "Check your bank's FD rates online today and open one if you have 2+ months of surplus saved.",
+        stat: `~7% guaranteed return`,
+      },
+      {
+        id: "r8",
+        category: "debt",
+        isWorldNews: false,
+        title: "Debt safety: know your limit",
+        hook: `Total EMIs should never exceed 40% of your income (₹${Math.round(inc * 0.4).toLocaleString("en-IN")}/month).`,
+        insight: `High EMI burden reduces your ability to save and invest. If your current EMIs are above 40% of ₹${inc.toLocaleString("en-IN")}, prioritize paying off high-interest loans first.`,
+        action:
+          "List all your current EMIs and calculate their % of income. Anything above 40% is a red flag.",
+        stat: `Safe EMI limit: ₹${Math.round(inc * 0.4).toLocaleString("en-IN")}/month`,
+      },
+      {
+        id: "r9",
+        category: "savings",
+        isWorldNews: false,
+        title: "3-month spending trend",
+        hook: `Your average monthly spend over 3 months is ₹${Math.round(profile.avg_monthly_spend || spend).toLocaleString("en-IN")}.`,
+        insight: `Tracking trends matters more than single months. If your spending has been rising, even a 10% cut saves ₹${Math.round((profile.avg_monthly_spend || spend) * 0.1).toLocaleString("en-IN")}/month — that's ₹${Math.round((profile.avg_monthly_spend || spend) * 0.1 * 12).toLocaleString("en-IN")} annually.`,
+        action:
+          "Review your top 3 expense categories from last month and set a 10% lower target this month.",
+        stat: `3M avg: ₹${Math.round(profile.avg_monthly_spend || spend).toLocaleString("en-IN")}`,
+      },
+      {
+        id: "r10",
+        category: "investment",
+        isWorldNews: false,
+        title: "SIP sweet spot for your income",
+        hook: `Based on your ₹${surplus.toLocaleString("en-IN")} surplus, you can safely invest ₹${Math.round(surplus * 0.3).toLocaleString("en-IN")}/month in SIPs.`,
+        insight: `30% of surplus is the ideal SIP amount — aggressive enough to grow wealth, conservative enough to not stress your budget. At 12% annual return, ₹${Math.round(surplus * 0.3).toLocaleString("en-IN")}/month becomes ₹${Math.round(Math.round(surplus * 0.3) * 36 * 1.43).toLocaleString("en-IN")} in 3 years.`,
+        action:
+          "Start a Nifty 50 index fund SIP today. Low cost, diversified, and proven long-term.",
+        stat: `Recommended SIP: ₹${Math.round(surplus * 0.3).toLocaleString("en-IN")}/month`,
+      },
+      // World Finance reels
+      {
+        id: "r11",
+        category: "markets",
+        isWorldNews: true,
+        title: "Nifty 50: India's financial heartbeat",
+        hook: "The Nifty 50 tracks India's 50 largest companies — and reflects the nation's economic health.",
+        insight:
+          "Nifty 50 has delivered ~12-14% CAGR over 20 years, outperforming most savings instruments. Index funds tracking Nifty are the lowest-cost way to participate in India's growth story.",
+        action:
+          "Check Nifty 50's 10-year return on Moneycontrol.com to understand long-term market power.",
+        stat: "~12-14% historical CAGR",
+      },
+      {
+        id: "r12",
+        category: "crypto",
+        isWorldNews: true,
+        title: "Crypto 101: High reward, high risk",
+        hook: "Bitcoin, Ethereum, and 20,000+ cryptocurrencies exist — but only a few have real fundamentals.",
+        insight:
+          "Crypto is highly volatile — assets can drop 70-80% in bear markets. Financial advisors recommend keeping crypto exposure under 5% of your total portfolio. Never invest money you can't afford to lose completely.",
+        action:
+          "If you're curious about crypto, start with ₹500 on a regulated exchange like CoinDCX or WazirX to learn without large risk.",
+        stat: "Max 5% of portfolio in crypto",
+      },
+      {
+        id: "r13",
+        category: "general",
+        isWorldNews: true,
+        title: "Compound interest: the 8th wonder",
+        hook: "₹10,000 invested at 12% becomes ₹17,623 in 5 years — without adding a single rupee more.",
+        insight:
+          "Einstein reportedly called compound interest the 8th wonder. The key is time: starting at age 22 with ₹2,000/month beats starting at 32 with ₹8,000/month due to the extra decade of compounding.",
+        action:
+          "Use a SIP calculator (Groww, ET Money) to see what your monthly investment becomes in 10-20 years. The numbers will motivate you.",
+        stat: "Money doubles every 6 years at 12%",
+      },
+      {
+        id: "r14",
+        category: "general",
+        isWorldNews: true,
+        title: "Inflation silently shrinks your money",
+        hook: "At 6% inflation, ₹1,00,000 today is worth only ₹74,726 in 5 years — in real purchasing power.",
+        insight:
+          "Money sitting in a 4% savings account loses purchasing power when inflation is 6%. This is why investing in instruments that beat inflation — like equity mutual funds — is essential for long-term wealth.",
+        action:
+          "Calculate your 'inflation-adjusted return' on any investment: subtract inflation rate from returns. Anything below 0% is actually losing value.",
+        stat: "6% inflation halves value in 12 years",
+      },
+      {
+        id: "r15",
+        category: "general",
+        isWorldNews: true,
+        title: "Tax saving: ELSS, PPF, NPS explained",
+        hook: "You can save up to ₹46,800 in taxes annually using Section 80C instruments.",
+        insight:
+          "ELSS mutual funds: 3-year lock-in, market-linked returns (~12-15%), tax deduction up to ₹1.5L. PPF: government-backed, 7.1% tax-free, 15-year lock-in. NPS: retirement-focused, additional ₹50,000 deduction under 80CCD(1B).",
+        action:
+          "Start with ELSS if you haven't used your ₹1.5L Section 80C limit — it's the most flexible and potentially highest-returning tax-saving option.",
+        stat: "Save up to ₹46,800/year in taxes",
       },
     ];
 
-    res.json({ reels: fallbackReels });
+    console.log("[REELS] Returning", fallbackReels.length, "fallback reels");
+    res.json({ reels: fallbackReels, dataHash });
   } catch (err) {
-    console.error("Reels generation error:", err);
+    console.error("[REELS] Error:", err.message);
     res.status(500).json({ error: err.message });
   }
 });
@@ -830,6 +993,26 @@ router.post("/read-image", async (req, res) => {
   } catch (err) {
     console.error("Image read error:", err);
     res.status(500).json({ error: "Could not read image" });
+  }
+});
+
+// GET /api/chatbot/reels-hash/:userId
+// Fast endpoint — returns only the dataHash without generating reels
+router.get("/reels-hash/:userId", async (req, res) => {
+  const { userId } = req.params;
+  console.log("[REELS-HASH] Computing hash for userId:", userId);
+  try {
+    const profile = await buildFinancialProfile(userId);
+    const dataHash =
+      String(profile.monthly_income) +
+      String(profile.monthly_spend) +
+      String(profile.goals_active) +
+      String(profile.monthly_saved);
+    console.log("[REELS-HASH] Hash computed:", dataHash);
+    res.json({ dataHash });
+  } catch (err) {
+    console.error("[REELS-HASH] Error:", err.message);
+    res.status(500).json({ error: err.message });
   }
 });
 
