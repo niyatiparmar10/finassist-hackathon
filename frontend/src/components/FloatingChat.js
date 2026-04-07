@@ -6,6 +6,7 @@ import { useNavigate, useLocation } from "react-router-dom";
 export default function FloatingChat() {
   const [messages, setMessages] = useState(null);
   const [dismissed, setDismissed] = useState(false);
+  const [expanded, setExpanded] = useState({});
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -42,6 +43,10 @@ export default function FloatingChat() {
     localStorage.removeItem("finassist_float_chat");
   }
 
+  function toggleExpanded(idx) {
+    setExpanded((prev) => ({ ...prev, [idx]: !prev[idx] }));
+  }
+
   if (!messages || dismissed || location.pathname === "/chat") return null;
 
   return (
@@ -51,11 +56,13 @@ export default function FloatingChat() {
         bottom: 24,
         right: 24,
         width: 320,
+        maxHeight: "72vh",
         zIndex: 1000,
         background: "var(--bg-card)",
         border: "1px solid var(--border)",
         borderRadius: 20,
         padding: 16,
+        overflow: "hidden",
         boxShadow: "0 8px 32px rgba(0,0,0,0.4)",
         animation: "slideUp 0.3s ease",
       }}
@@ -124,26 +131,76 @@ export default function FloatingChat() {
       </div>
 
       {/* Messages */}
-      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      <div
+        style={{
+          display: "flex",
+          flexDirection: "column",
+          gap: 8,
+          overflowY: "auto",
+          maxHeight: "52vh",
+          paddingRight: 2,
+        }}
+      >
         {messages.map((msg, i) => (
           <div
             key={i}
             style={{
-              alignSelf: msg.role === "user" ? "flex-end" : "flex-start",
-              background:
-                msg.role === "user"
-                  ? "var(--green-dim)"
-                  : "rgba(255,255,255,0.05)",
-              border: `1px solid ${msg.role === "user" ? "rgba(0,229,160,0.2)" : "var(--border)"}`,
-              borderRadius: 12,
-              padding: "8px 12px",
-              fontSize: 13,
-              maxWidth: "90%",
-              color:
-                msg.role === "user" ? "var(--green)" : "var(--text-primary)",
+              display: "flex",
+              justifyContent: msg.role === "user" ? "flex-end" : "flex-start",
+              width: "100%",
             }}
           >
-            {msg.text}
+            <div
+              style={{
+                background:
+                  msg.role === "user"
+                    ? "var(--green-dim)"
+                    : "rgba(255,255,255,0.05)",
+                border: `1px solid ${msg.role === "user" ? "rgba(0,229,160,0.2)" : "var(--border)"}`,
+                borderRadius: 12,
+                padding: "8px 12px",
+                fontSize: 13,
+                maxWidth: "90%",
+                color:
+                  msg.role === "user" ? "var(--green)" : "var(--text-primary)",
+              }}
+            >
+              {(() => {
+                const longMsg = (msg.text || "").length > 260;
+                const isExpanded = !!expanded[i];
+                const preview = longMsg
+                  ? `${msg.text.slice(0, 260)}...`
+                  : msg.text;
+                return (
+                  <>
+                    <div
+                      style={{
+                        whiteSpace: "pre-wrap",
+                        wordBreak: "break-word",
+                      }}
+                    >
+                      {isExpanded ? msg.text : preview}
+                    </div>
+                    {longMsg && (
+                      <button
+                        onClick={() => toggleExpanded(i)}
+                        style={{
+                          marginTop: 6,
+                          background: "transparent",
+                          border: "none",
+                          color: "var(--green)",
+                          fontSize: 12,
+                          cursor: "pointer",
+                          padding: 0,
+                        }}
+                      >
+                        {isExpanded ? "See less" : "See more"}
+                      </button>
+                    )}
+                  </>
+                );
+              })()}
+            </div>
           </div>
         ))}
       </div>

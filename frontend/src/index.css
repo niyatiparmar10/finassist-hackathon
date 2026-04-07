@@ -596,6 +596,8 @@ textarea {
   font-size: 14px;
   line-height: 1.5;
   box-shadow: 0 0 15px rgba(0, 229, 160, 0.1);
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .chat-bubble-bot {
@@ -608,6 +610,8 @@ textarea {
   font-size: 14px;
   line-height: 1.6;
   backdrop-filter: blur(12px);
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 /* ── Reel card ──────────────────────────────────────────────── */
@@ -688,7 +692,6 @@ textarea {
 .fade-up-4 {
   animation-delay: 0.2s;
 }
-
 /* ── Scrollbar ──────────────────────────────────────────────── */
 ::-webkit-scrollbar {
   width: 4px;

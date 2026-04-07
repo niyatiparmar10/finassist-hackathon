@@ -4,6 +4,174 @@ import React, { useEffect, useState, useCallback } from "react";
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } from "recharts";
 import api from "../api";
 
+// 3D Avatar Component
+function FinAssistAvatar() {
+  const [mode, setMode] = useState("idle");
+  const containerRef = React.useRef(null);
+
+  useEffect(() => {
+    if (!containerRef.current) return;
+    const container = containerRef.current.querySelector("#particles");
+    if (!container) return;
+
+    container.innerHTML = "";
+    for (let i = 0; i < 18; i++) {
+      const p = document.createElement("div");
+      p.className = "particle";
+      const size = Math.random() * 4 + 2;
+      const left = Math.random() * 100;
+      const delay = Math.random() * 6;
+      const dur = Math.random() * 8 + 6;
+      const dx = (Math.random() - 0.5) * 120;
+      const color =
+        Math.random() > 0.5 ? "rgba(0,229,160,0.6)" : "rgba(168,85,247,0.5)";
+      p.style.cssText = `
+        width:${size}px; height:${size}px;
+        left:${left}%; bottom:0;
+        background:${color};
+        animation-duration:${dur}s;
+        animation-delay:${delay}s;
+        --dx:${dx}px;
+      `;
+      container.appendChild(p);
+    }
+  }, []);
+
+  const handleSetMode = (newMode) => {
+    setMode(newMode);
+    const mouth = containerRef.current?.querySelector("#mouth");
+    const wave = containerRef.current?.querySelector("#wave");
+    const think = containerRef.current?.querySelector("#think-dots");
+    const tagline = containerRef.current?.querySelector("#tagline");
+    const status = containerRef.current?.querySelector("#status");
+    const eyeL = containerRef.current?.querySelector("#eye-l");
+    const eyeR = containerRef.current?.querySelector("#eye-r");
+
+    if (!mouth || !wave || !think || !tagline || !status || !eyeL || !eyeR)
+      return;
+
+    mouth.classList.remove("talking");
+    wave.classList.remove("show");
+    think.classList.remove("show");
+    eyeL.style.transform = "";
+    eyeR.style.transform = "";
+    eyeL.style.animation = "blink 4s ease-in-out infinite";
+    eyeR.style.animation = "blink 4s ease-in-out infinite";
+
+    if (newMode === "talk") {
+      mouth.classList.add("talking");
+      wave.classList.add("show");
+      tagline.textContent = "Speaking...";
+      status.style.background = "#00e5a0";
+      eyeL.style.animation = "blink 0.5s ease-in-out infinite";
+      eyeR.style.animation = "blink 0.6s ease-in-out infinite";
+    } else if (newMode === "think") {
+      think.classList.add("show");
+      tagline.textContent = "Processing...";
+      status.style.background = "#a855f7";
+      eyeL.style.animation = "none";
+      eyeR.style.animation = "none";
+      eyeL.style.transform = "scaleY(0.4)";
+      eyeR.style.transform = "scaleY(0.4)";
+    } else {
+      tagline.textContent = "Your finance AI";
+      status.style.background = "#00e5a0";
+    }
+  };
+
+  return (
+    <div ref={containerRef} style={{ marginBottom: 32 }}>
+      <style>{`
+        .avatar-scene { width: 100%; max-width: 500px; height: 280px; display: flex; align-items: center; justify-content: center; background: #07070f; border-radius: 16px; position: relative; overflow: hidden; margin: 0 auto; }
+        .avatar-bg-grid { position: absolute; inset: 0; background-image: linear-gradient(rgba(0,229,160,0.04) 1px, transparent 1px), linear-gradient(90deg, rgba(0,229,160,0.04) 1px, transparent 1px); background-size: 40px 40px; }
+        .avatar-bg-glow { position: absolute; width: 300px; height: 300px; border-radius: 50%; background: radial-gradient(circle, rgba(0,229,160,0.08) 0%, transparent 70%); top: 50%; left: 50%; transform: translate(-50%, -50%); }
+        .avatar-wrap { position: relative; display: flex; flex-direction: column; align-items: center; gap: 12px; z-index: 2; }
+        .avatar-main { position: relative; width: 120px; height: 120px; animation: avatar-float 3s ease-in-out infinite; }
+        @keyframes avatar-float { 0%, 100% { transform: translateY(0px); } 50% { transform: translateY(-12px); } }
+        .ring-outer { position: absolute; inset: -12px; border-radius: 50%; border: 1.5px solid rgba(0,229,160,0.2); animation: spin-slow 8s linear infinite; }
+        .ring-mid { position: absolute; inset: -6px; border-radius: 50%; border: 1px solid rgba(168,85,247,0.25); animation: spin-slow 5s linear infinite reverse; }
+        @keyframes spin-slow { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+        .ring-outer::before { content: ''; position: absolute; width: 8px; height: 8px; border-radius: 50%; background: #00e5a0; top: -4px; left: 50%; transform: translateX(-50%); box-shadow: 0 0 12px #00e5a0; }
+        .ring-mid::before { content: ''; position: absolute; width: 6px; height: 6px; border-radius: 50%; background: #a855f7; bottom: -3px; right: 20%; box-shadow: 0 0 10px #a855f7; }
+        .avatar-body { width: 120px; height: 120px; border-radius: 50%; background: linear-gradient(135deg, #0d1117 0%, #161b27 100%); border: 1.5px solid rgba(0,229,160,0.3); display: flex; align-items: center; justify-content: center; position: relative; overflow: hidden; }
+        .avatar-body::before { content: ''; position: absolute; inset: 0; border-radius: 50%; background: linear-gradient(135deg, rgba(0,229,160,0.08) 0%, rgba(168,85,247,0.08) 100%); }
+        .face { position: relative; z-index: 2; display: flex; flex-direction: column; align-items: center; gap: 8px; }
+        .eyes { display: flex; gap: 20px; align-items: center; }
+        .eye { width: 10px; height: 10px; border-radius: 50%; background: #00e5a0; position: relative; animation: blink 4s ease-in-out infinite; }
+        .eye::after { content: ''; position: absolute; width: 3px; height: 3px; border-radius: 50%; background: rgba(255,255,255,0.8); top: 2px; left: 2px; }
+        @keyframes blink { 0%, 90%, 100% { transform: scaleY(1); } 95% { transform: scaleY(0.1); } }
+        .eye.right { background: #a855f7; }
+        .mouth { width: 24px; height: 2px; border-radius: 99px; background: rgba(0,229,160,0.6); }
+        .mouth.talking { animation: talk 0.3s ease-in-out infinite alternate; }
+        @keyframes talk { from { height: 2px; width: 24px; border-radius: 99px; } to { height: 6px; width: 20px; border-radius: 4px; background: rgba(0,229,160,0.4); } }
+        .wave-bar { display: none; gap: 2px; align-items: center; height: 12px; }
+        .wave-bar.show { display: flex; }
+        .bar { width: 2px; border-radius: 99px; background: #00e5a0; animation: wave-anim 0.8s ease-in-out infinite; }
+        .bar:nth-child(1) { animation-delay: 0s; } .bar:nth-child(2) { animation-delay: 0.1s; } .bar:nth-child(3) { animation-delay: 0.2s; } .bar:nth-child(4) { animation-delay: 0.3s; } .bar:nth-child(5) { animation-delay: 0.4s; }
+        @keyframes wave-anim { 0%, 100% { height: 3px; } 50% { height: 12px; } }
+        .status-ring { position: absolute; bottom: 4px; right: 4px; width: 16px; height: 16px; border-radius: 50%; background: #07070f; border: 2px solid #07070f; display: flex; align-items: center; justify-content: center; }
+        .status-dot { width: 10px; height: 10px; border-radius: 50%; background: #00e5a0; animation: pulse-dot 2s ease-in-out infinite; }
+        @keyframes pulse-dot { 0%, 100% { box-shadow: 0 0 0 0 rgba(0,229,160,0.6); } 50% { box-shadow: 0 0 0 4px rgba(0,229,160,0); } }
+        .avatar-think { display: none; gap: 4px; justify-content: center; }
+        .avatar-think.show { display: flex; }
+        .dot { width: 5px; height: 5px; border-radius: 50%; background: #a855f7; animation: bounce-dot 1.2s ease-in-out infinite; }
+        .dot:nth-child(2) { animation-delay: 0.2s; } .dot:nth-child(3) { animation-delay: 0.4s; }
+        @keyframes bounce-dot { 0%, 80%, 100% { transform: translateY(0); } 40% { transform: translateY(-6px); } }
+        .avatar-particles { position: absolute; inset: 0; pointer-events: none; }
+        .particle { position: absolute; border-radius: 50%; animation: drift linear infinite; }
+        @keyframes drift { 0% { transform: translateY(100%) translateX(0); opacity: 0; } 10% { opacity: 1; } 90% { opacity: 0.5; } 100% { transform: translateY(-20px) translateX(var(--dx)); opacity: 0; } }
+        .avatar-name { text-align: center; font-size: 14px; font-weight: 700; color: #fff; }
+        .avatar-name span { background: linear-gradient(90deg, #00e5a0, #a855f7); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; }
+        .avatar-tagline { font-size: 10px; color: rgba(255,255,255,0.4); margin-top: 2px; transition: color 0.3s; text-transform: uppercase; }
+      `}</style>
+
+      <div className="avatar-scene">
+        <div className="avatar-bg-grid" />
+        <div className="avatar-bg-glow" />
+        <div className="avatar-particles" id="particles" />
+
+        <div className="avatar-wrap">
+          <div className="avatar-main">
+            <div className="ring-outer" />
+            <div className="ring-mid" />
+            <div className="avatar-body">
+              <div className="face">
+                <div className="eyes">
+                  <div className="eye left" id="eye-l" />
+                  <div className="eye right" id="eye-r" />
+                </div>
+                <div className="mouth" id="mouth" />
+                <div className="wave-bar" id="wave">
+                  <div className="bar" />
+                  <div className="bar" />
+                  <div className="bar" />
+                  <div className="bar" />
+                  <div className="bar" />
+                </div>
+              </div>
+              <div className="status-ring">
+                <div className="status-dot" id="status" />
+              </div>
+            </div>
+          </div>
+
+          <div className="avatar-name">
+            Fin<span>Assist</span>
+          </div>
+          <div className="avatar-tagline" id="tagline">
+            Your finance AI
+          </div>
+          <div className="avatar-think" id="think-dots">
+            <div className="dot" />
+            <div className="dot" />
+            <div className="dot" />
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 const COLORS = [
   "#00e5a0",
   "#a855f7",
@@ -207,7 +375,43 @@ export default function Dashboard() {
       });
     }
 
-    setNotifications(notifs);
+    // Always keep 4-5 notifications visible by padding with contextual insights.
+    const fallbackNotifs = [
+      {
+        id: "fallback-budget-health",
+        type: "info",
+        msg: `Your monthly income is ₹${(userIncome || 0).toLocaleString("en-IN")}. Keep fixed commitments under control to protect surplus.`,
+      },
+      {
+        id: "fallback-save-habit",
+        type: "positive",
+        msg: `Small, consistent savings beat irregular big deposits. Try setting one auto-save date every month.`,
+      },
+      {
+        id: "fallback-spend-check",
+        type: "warning",
+        msg: `Quick check: review your top 2 spending categories weekly to avoid month-end pressure.`,
+      },
+      {
+        id: "fallback-goal-nudge",
+        type: "info",
+        msg: `Goal progress improves fastest when each salary cycle has a fixed transfer amount.`,
+      },
+      {
+        id: "fallback-investment-nudge",
+        type: "positive",
+        msg: `Long-term investing works best with consistency. Continue active SIP/EMI tracking every month.`,
+      },
+    ];
+
+    for (const fb of fallbackNotifs) {
+      if (notifs.length >= 5) break;
+      if (!notifs.some((n) => n.id === fb.id)) {
+        notifs.push(fb);
+      }
+    }
+
+    setNotifications(notifs.slice(0, 5));
   }, [loading, summary, savings, goals, investments, userIncome]);
 
   function dismissNotif(id) {
@@ -348,7 +552,12 @@ export default function Dashboard() {
         </p>
       </div>
 
-      {/* Notifications */}
+      {/* 3D Avatar */}
+      <div className="fade-up" style={{ marginBottom: 24 }}>
+        <FinAssistAvatar />
+      </div>
+
+      {/* Notifications - Vertical Layout */}
       {visibleNotifs.length > 0 && (
         <div className="fade-up" style={{ marginBottom: 24 }}>
           <div
@@ -366,8 +575,8 @@ export default function Dashboard() {
           <div
             style={{
               display: "flex",
+              flexDirection: "column",
               gap: 12,
-              overflowX: "auto",
               paddingBottom: 4,
             }}
           >
@@ -377,9 +586,7 @@ export default function Dashboard() {
                 <div
                   key={notif.id}
                   style={{
-                    minWidth: 280,
-                    maxWidth: 340,
-                    flexShrink: 0,
+                    width: "100%",
                     background: cfg.bg,
                     border: `1px solid ${cfg.border}40`,
                     borderLeft: `3px solid ${cfg.border}`,

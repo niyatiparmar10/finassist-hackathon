@@ -26,6 +26,7 @@ export default function Chat() {
   const [isListening, setIsListening] = useState(false);
   const [imageLoading, setImageLoading] = useState(false);
   const fileInputRef = useRef(null);
+  const textareaRef = useRef(null);
 
   // Load chat history on mount
   useEffect(() => {
@@ -68,6 +69,12 @@ export default function Chat() {
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, loading]);
+
+  useEffect(() => {
+    if (!textareaRef.current) return;
+    textareaRef.current.style.height = "auto";
+    textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 180)}px`;
+  }, [input]);
 
   async function sendMessage(text) {
     const msg = text || input.trim();
@@ -325,15 +332,15 @@ export default function Chat() {
         }}
       >
         {messages.map((msg, i) => (
-          <div key={i} style={{ display: "flex", flexDirection: "column" }}>
+          <div key={i} style={{ width: "100%" }}>
             {msg.role === "user" ? (
               <div
                 style={{
-                  alignSelf: "flex-end",
                   display: "flex",
+                  justifyContent: "flex-end",
                   alignItems: "flex-end",
                   gap: 8,
-                  maxWidth: "70%",
+                  width: "100%",
                 }}
               >
                 <div className="chat-bubble-user">{msg.text}</div>
@@ -539,12 +546,13 @@ export default function Chat() {
         }}
       >
         <textarea
+          ref={textareaRef}
           className="input"
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={handleKey}
           placeholder="Type anything... 'Spent ₹200 on food' or 'I want to save for a trip'"
-          rows={1}
+          rows={4}
           style={{
             resize: "none",
             border: "none",
@@ -554,6 +562,9 @@ export default function Chat() {
             lineHeight: 1.5,
             boxShadow: "none",
             flex: 1,
+            minHeight: 96,
+            maxHeight: 180,
+            overflowY: "auto",
           }}
         />
 
