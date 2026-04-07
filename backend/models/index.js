@@ -91,6 +91,48 @@ const monthlyProfileSchema = new mongoose.Schema({
 });
 monthlyProfileSchema.index({ userId: 1, year: 1, month: 1 }, { unique: true });
 
+// ── [NEW SECTION 6] Financial Investment ──────────────
+// Tracks active SIPs, EMIs, FDs, mutual funds, RDs
+const financialInvestmentSchema = new mongoose.Schema({
+  userId: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
+  type: {
+    type: String,
+    enum: ["sip", "emi", "fd", "mutual_fund", "rd"],
+    required: true,
+  },
+  name: { type: String, required: true }, // e.g. "Nifty 50 Index Fund SIP"
+  monthlyAmount: { type: Number, required: true }, // monthly commitment
+  totalAmount: { type: Number }, // for FD/lump sum
+  startDate: { type: Date, default: Date.now },
+  endDate: { type: Date }, // optional, for EMI with fixed tenure
+  tenureMonths: { type: Number }, // how many months total
+  interestRate: { type: Number }, // annual rate for FD/EMI
+  status: {
+    type: String,
+    enum: ["active", "completed", "paused"],
+    default: "active",
+  },
+  notes: { type: String, default: "" },
+  createdAt: { type: Date, default: Date.now },
+});
+
+// ── [NEW SECTION 6] Todo Item ─────────────────────────
+// Personal to-do list items per user (pay someone, collect money, reminders)
+const todoItemSchema = new mongoose.Schema({
+  userId: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
+  text: { type: String, required: true }, // the task description
+  type: {
+    type: String,
+    enum: ["pay", "collect", "reminder", "other"],
+    default: "other",
+  }, // tag for color-coding
+  amount: { type: Number, default: null }, // optional amount if money-related
+  person: { type: String, default: "" }, // optional person name
+  completed: { type: Boolean, default: false },
+  createdAt: { type: Date, default: Date.now },
+  updatedAt: { type: Date, default: Date.now },
+});
+
 module.exports = {
   User: mongoose.model("User", userSchema),
   Expense: mongoose.model("Expense", expenseSchema),
@@ -98,4 +140,9 @@ module.exports = {
   Goal: mongoose.model("Goal", goalSchema),
   ChatHistory: mongoose.model("ChatHistory", chatHistorySchema),
   MonthlyProfile: mongoose.model("MonthlyProfile", monthlyProfileSchema),
+  FinancialInvestment: mongoose.model(
+    "FinancialInvestment",
+    financialInvestmentSchema,
+  ),
+  TodoItem: mongoose.model("TodoItem", todoItemSchema),
 };

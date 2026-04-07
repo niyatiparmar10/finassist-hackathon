@@ -1,3 +1,6 @@
+// server.js
+// SECTION 6 UPDATE: Added /api/investments and /api/todos routes
+
 require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
@@ -29,7 +32,7 @@ app.use("/api/chatbot/message", (req, res, next) => {
   next();
 });
 
-// Routes
+// ── Routes ─────────────────────────────────────────────────────────────────────
 app.use("/api/auth", require("./routes/auth"));
 app.use("/api/expenses", require("./routes/expenses"));
 app.use("/api/savings", require("./routes/savings"));
@@ -39,18 +42,28 @@ app.use("/api/chatbot", require("./routes/chatbot"));
 app.use("/api/insights", require("./routes/insights"));
 app.use("/api/user", require("./routes/user"));
 
+// [SECTION 6] New routes
+app.use("/api/investments", require("./routes/investments"));
+app.use("/api/todos", require("./routes/todos"));
+
+console.log(
+  "[SERVER] All routes registered including /api/investments and /api/todos",
+);
+
 app.get("/", (req, res) => res.json({ status: "FinMind AI backend running" }));
 
 // Connect to MongoDB then start server
 mongoose
   .connect(process.env.MONGODB_URI)
   .then(() => {
-    console.log("MongoDB connected");
+    console.log("[SERVER] MongoDB connected");
     app.listen(process.env.PORT || 3001, () => {
-      console.log(`Backend running on port ${process.env.PORT || 3001}`);
+      console.log(
+        `[SERVER] Backend running on port ${process.env.PORT || 3001}`,
+      );
     });
   })
   .catch((err) => {
-    console.error("MongoDB connection error:", err.message);
+    console.error("[SERVER] MongoDB connection error:", err.message);
     process.exit(1);
   });

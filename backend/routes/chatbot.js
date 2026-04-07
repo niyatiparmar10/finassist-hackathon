@@ -42,6 +42,9 @@ router.post("/message", async (req, res) => {
     let responseAction = null;
     let responseActionData = null;
     let directReply = null;
+    let suggestLog = false;
+    let suggestLogType = null;
+    let suggestLogAmount = null;
 
     const profilePeriod =
       detected.period === "explicit"
@@ -191,6 +194,9 @@ DO NOT hallucinate or change the amount. DO NOT change the year. Use EXACTLY ₹
         actionData: {},
         intent,
         saved: false,
+        suggestLog: false,
+        suggestLogType: null,
+        suggestLogAmount: null,
       });
     } else if (intent === INTENTS.GET_INSIGHTS) {
       console.log("[DEBUG] Handling GET_INSIGHTS, period:", profilePeriod);
@@ -287,6 +293,12 @@ Give a friendly 3-4 sentence summary of how they are doing financially. Include 
       }
 
       if (simResult) {
+        if (simResult.safe === true) {
+          suggestLog = true;
+          suggestLogType = "emi";
+          suggestLogAmount = detected.amount || 5000;
+        }
+
         contextForOllama = `=== SIMULATION RESULT (pre-calculated) ===
 EMI Amount: ₹${detected.amount}/month
 New Monthly Surplus After EMI: ₹${simResult.monthly_surplus_after_emi}
@@ -323,6 +335,12 @@ Give general advice about whether they should take an EMI based on their surplus
       }
 
       if (simResult) {
+        if (simResult.safe === true) {
+          suggestLog = true;
+          suggestLogType = "sip";
+          suggestLogAmount = amount;
+        }
+
         contextForOllama = `FACTS (pre-calculated hypothetical from simulator):
 - Proposed SIP: ₹${amount}/month × 24 months at 12% annual return
 - Total you would invest: ₹${simResult.total_invested}
@@ -548,6 +566,9 @@ Respond helpfully. You can help them log expenses, savings, create goals, or ans
       actionData: finalActionData,
       intent,
       saved: !!savedData,
+      suggestLog,
+      suggestLogType,
+      suggestLogAmount,
     });
   } catch (err) {
     console.error("Chatbot error:", err);

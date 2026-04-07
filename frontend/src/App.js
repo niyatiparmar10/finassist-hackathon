@@ -14,6 +14,7 @@ import Chat from "./pages/Chat";
 import Goals from "./pages/Goals";
 import Savings from "./pages/Savings";
 import Cards from "./pages/Cards";
+import Investments from "./pages/Investments";
 import FloatingChat from "./components/FloatingChat";
 import Expenses from "./pages/Expenses";
 import Income from "./pages/Income";
@@ -26,6 +27,7 @@ const NAV = [
   { to: "/expenses", icon: "◉", label: "Expenses" },
   { to: "/goals", icon: "◎", label: "Goals" },
   { to: "/savings", icon: "◇", label: "Savings" },
+  { to: "/investments", icon: "📈", label: "Investments" },
   { to: "/income", icon: "◈", label: "Income" },
   { to: "/cards", icon: "▣", label: "Cards" },
 ];
@@ -161,6 +163,16 @@ export default function App() {
             <PrivateRoute>
               <AppShell>
                 <Expenses />
+              </AppShell>
+            </PrivateRoute>
+          }
+        />
+        <Route
+          path="/investments"
+          element={
+            <PrivateRoute>
+              <AppShell>
+                <Investments />
               </AppShell>
             </PrivateRoute>
           }

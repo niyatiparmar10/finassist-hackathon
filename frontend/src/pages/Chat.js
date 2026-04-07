@@ -1,4 +1,6 @@
-//Chat.js
+// frontend/src/pages/Chat.jsx
+// SECTION 6 UPDATE: Shows "Log this investment?" prompt card when chatbot returns suggestLog=true
+
 import React, { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import api from "../api";
@@ -28,11 +30,17 @@ export default function Chat() {
   // Load chat history on mount
   useEffect(() => {
     async function loadHistory() {
+      console.log("[CHAT] Loading chat history for userId:", userId);
       try {
         const { data } = await api.get(`/chat/history/${userId}`);
         if (data.history?.length > 0) {
           setMessages(
             data.history.map((h) => ({ role: h.role, text: h.message })),
+          );
+          console.log(
+            "[CHAT] History loaded:",
+            data.history.length,
+            "messages",
           );
         } else {
           setMessages([
@@ -42,7 +50,8 @@ export default function Chat() {
             },
           ]);
         }
-      } catch {
+      } catch (err) {
+        console.error("[CHAT] History load error:", err.message);
         setMessages([
           {
             role: "bot",
@@ -67,15 +76,34 @@ export default function Chat() {
     setMessages((prev) => [...prev, { role: "user", text: msg }]);
     setLoading(true);
 
+    console.log("[CHAT] Sending message:", msg.slice(0, 60));
+
     try {
       const { data } = await api.post("/chatbot/message", {
         userId,
         message: msg,
       });
-      setMessages((prev) => [
-        ...prev,
-        { role: "bot", text: data.reply, action: data.action },
-      ]);
+      console.log(
+        "[CHAT] Response received. intent:",
+        data.intent,
+        "suggestLog:",
+        data.suggestLog,
+        "action:",
+        data.action,
+      );
+
+      // Build bot message with optional suggestLog metadata
+      const botMsg = {
+        role: "bot",
+        text: data.reply,
+        action: data.action,
+        suggestLog: data.suggestLog || false,
+        suggestLogType: data.suggestLogType,
+        suggestLogAmount: data.suggestLogAmount,
+        suggestLogDismissed: false,
+      };
+
+      setMessages((prev) => [...prev, botMsg]);
 
       // Handle navigation actions
       const navigationActions = [
@@ -85,9 +113,7 @@ export default function Chat() {
         "NAVIGATE_DASHBOARD",
         "NAVIGATE_CARDS",
       ];
-
       if (navigationActions.includes(data.action)) {
-        // Store last 2 messages for floating chat
         const lastMessages = [
           { role: "user", text: msg },
           { role: "bot", text: data.reply },
@@ -111,6 +137,7 @@ export default function Chat() {
         setTimeout(() => navigate(routeMap[data.action]), 1800);
       }
     } catch (err) {
+      console.error("[CHAT] Send error:", err.message);
       setMessages((prev) => [
         ...prev,
         {
@@ -121,6 +148,26 @@ export default function Chat() {
     } finally {
       setLoading(false);
     }
+  }
+
+  // Dismiss a suggestLog prompt on a specific message
+  function dismissSuggestLog(msgIdx) {
+    console.log("[CHAT] Dismissing suggestLog on message:", msgIdx);
+    setMessages((prev) =>
+      prev.map((m, i) =>
+        i === msgIdx ? { ...m, suggestLogDismissed: true } : m,
+      ),
+    );
+  }
+
+  // Navigate to investments page with pre-fill
+  function logInvestment(type, amount, msgIdx) {
+    console.log("[CHAT] Navigating to investments with prefill:", {
+      type,
+      amount,
+    });
+    dismissSuggestLog(msgIdx);
+    navigate(`/investments?prefill=${type}&amount=${amount}`);
   }
 
   function handleKey(e) {
@@ -141,7 +188,6 @@ export default function Chat() {
     recognition.lang = "en-IN";
     recognition.continuous = false;
     recognition.interimResults = false;
-
     recognition.onstart = () => setIsListening(true);
     recognition.onend = () => setIsListening(false);
     recognition.onerror = () => {
@@ -150,6 +196,7 @@ export default function Chat() {
     };
     recognition.onresult = (event) => {
       const transcript = event.results[0][0].transcript;
+      console.log("[CHAT] Voice transcript:", transcript);
       setInput(transcript);
     };
     recognition.start();
@@ -159,6 +206,7 @@ export default function Chat() {
     const file = e.target.files[0];
     if (!file) return;
     setImageLoading(true);
+    console.log("[CHAT] Reading image:", file.name);
 
     const reader = new FileReader();
     reader.onload = async () => {
@@ -171,6 +219,10 @@ export default function Chat() {
           mimeType,
         });
         setInput(data.extractedText);
+        console.log(
+          "[CHAT] Image text extracted, length:",
+          data.extractedText?.length,
+        );
       } catch {
         alert("Could not read image. Try again.");
       } finally {
@@ -316,7 +368,9 @@ export default function Chat() {
                 </div>
                 <div>
                   <div className="chat-bubble-bot">{msg.text}</div>
-                  {msg.action && msg.action !== "null" && (
+
+                  {/* Navigation redirect badge */}
+                  {msg.action && msg.action !== "null" && !msg.suggestLog && (
                     <div
                       style={{
                         marginTop: 6,
@@ -332,6 +386,82 @@ export default function Chat() {
                       }}
                     >
                       ↗ Redirecting you...
+                    </div>
+                  )}
+
+                  {/* [SECTION 6] SuggestLog prompt card */}
+                  {msg.suggestLog && !msg.suggestLogDismissed && (
+                    <div
+                      style={{
+                        marginTop: 10,
+                        padding: "12px 14px",
+                        borderRadius: 12,
+                        background: "rgba(168,85,247,0.08)",
+                        border: "1px solid rgba(168,85,247,0.25)",
+                        maxWidth: 320,
+                      }}
+                    >
+                      <div
+                        style={{
+                          fontSize: 13,
+                          fontWeight: 600,
+                          marginBottom: 6,
+                          color: "#a855f7",
+                        }}
+                      >
+                        📊 Want to track this{" "}
+                        {msg.suggestLogType?.toUpperCase()}?
+                      </div>
+                      <div
+                        style={{
+                          fontSize: 12,
+                          color: "var(--text-secondary)",
+                          marginBottom: 10,
+                        }}
+                      >
+                        Log this ₹
+                        {Number(msg.suggestLogAmount).toLocaleString("en-IN")}
+                        /month {msg.suggestLogType === "sip" ? "SIP" : "EMI"} as
+                        an active investment to track it over time.
+                      </div>
+                      <div style={{ display: "flex", gap: 8 }}>
+                        <button
+                          onClick={() =>
+                            logInvestment(
+                              msg.suggestLogType,
+                              msg.suggestLogAmount,
+                              i,
+                            )
+                          }
+                          style={{
+                            flex: 1,
+                            fontSize: 12,
+                            padding: "7px",
+                            borderRadius: 8,
+                            background: "rgba(168,85,247,0.15)",
+                            border: "1px solid rgba(168,85,247,0.3)",
+                            color: "#a855f7",
+                            cursor: "pointer",
+                            fontWeight: 600,
+                          }}
+                        >
+                          Yes, Log It →
+                        </button>
+                        <button
+                          onClick={() => dismissSuggestLog(i)}
+                          style={{
+                            fontSize: 12,
+                            padding: "7px 12px",
+                            borderRadius: 8,
+                            background: "transparent",
+                            border: "1px solid var(--border)",
+                            color: "var(--text-muted)",
+                            cursor: "pointer",
+                          }}
+                        >
+                          Not now
+                        </button>
+                      </div>
                     </div>
                   )}
                 </div>
@@ -427,7 +557,6 @@ export default function Chat() {
           }}
         />
 
-        {/* Hidden file input */}
         <input
           type="file"
           accept="image/*"
@@ -436,7 +565,6 @@ export default function Chat() {
           onChange={handleImageUpload}
         />
 
-        {/* Mic button */}
         <button
           onClick={startVoice}
           style={{
@@ -455,7 +583,6 @@ export default function Chat() {
           🎤
         </button>
 
-        {/* Camera button */}
         <button
           onClick={() => fileInputRef.current?.click()}
           disabled={imageLoading}
@@ -490,14 +617,8 @@ export default function Chat() {
       </div>
 
       <style>{`
-        @keyframes bounce {
-          0%, 80%, 100% { transform: translateY(0); }
-          40% { transform: translateY(-6px); }
-        }
-        @keyframes pulse {
-          0%, 100% { opacity: 1; }
-          50% { opacity: 0.4; }
-        }
+        @keyframes bounce { 0%, 80%, 100% { transform: translateY(0); } 40% { transform: translateY(-6px); } }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
       `}</style>
     </div>
   );
