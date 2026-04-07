@@ -1,12 +1,33 @@
 require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
+const helmet = require("helmet");
 const mongoose = require("mongoose");
 
 const app = express();
 
+app.use(helmet());
 app.use(cors());
 app.use(express.json());
+
+// In-memory rate limiter — no npm package needed
+const chatRequestCounts = {};
+app.use("/api/chatbot/message", (req, res, next) => {
+  const userId = req.headers["x-user-id"] || req.ip;
+  const now = Date.now();
+  if (!chatRequestCounts[userId]) chatRequestCounts[userId] = [];
+  // Keep only requests from the last 60 seconds
+  chatRequestCounts[userId] = chatRequestCounts[userId].filter(
+    (t) => now - t < 60000,
+  );
+  if (chatRequestCounts[userId].length >= 20) {
+    return res
+      .status(429)
+      .json({ error: "Too many messages. Please wait a moment." });
+  }
+  chatRequestCounts[userId].push(now);
+  next();
+});
 
 // Routes
 app.use("/api/auth", require("./routes/auth"));

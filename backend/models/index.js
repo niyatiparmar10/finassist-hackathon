@@ -73,10 +73,28 @@ const chatHistorySchema = new mongoose.Schema({
   timestamp: { type: Date, default: Date.now },
 });
 
+const monthlyProfileSchema = new mongoose.Schema({
+  userId: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
+  year: { type: Number, required: true },
+  month: { type: Number, required: true }, // 0-indexed: 0=Jan, 11=Dec
+  totalDaysInMonth: { type: Number },
+  daysRecorded: { type: Number }, // partial month awareness
+  totalIncome: { type: Number, default: 0 },
+  totalSpend: { type: Number, default: 0 },
+  totalSaved: { type: Number, default: 0 },
+  categoryBreakdown: { type: Object, default: {} },
+  surplus: { type: Number, default: 0 },
+  isComplete: { type: Boolean, default: false }, // true only after month ends
+  createdAt: { type: Date, default: Date.now },
+  updatedAt: { type: Date, default: Date.now },
+});
+monthlyProfileSchema.index({ userId: 1, year: 1, month: 1 }, { unique: true });
+
 module.exports = {
   User: mongoose.model("User", userSchema),
   Expense: mongoose.model("Expense", expenseSchema),
   Saving: mongoose.model("Saving", savingSchema),
   Goal: mongoose.model("Goal", goalSchema),
   ChatHistory: mongoose.model("ChatHistory", chatHistorySchema),
+  MonthlyProfile: mongoose.model("MonthlyProfile", monthlyProfileSchema),
 };
