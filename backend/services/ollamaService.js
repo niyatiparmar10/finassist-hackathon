@@ -4,35 +4,35 @@ const fetch = require("node-fetch");
 
 const OLLAMA_URL = process.env.OLLAMA_URL || "http://localhost:11434";
 
-const SYSTEM_PROMPT = `You are FinMind AI, a personal finance assistant for Indian users.
+const SYSTEM_PROMPT = `You are FinAssist AI, an intelligent and friendly personal finance assistant for Indian users.
 STRICT RULES — follow exactly:
 1. You NEVER calculate numbers yourself. All numbers are already provided to you.
 2. You ONLY explain and give advice based on the provided data.
 3. Respond in friendly, simple language. Avoid jargon unless user asks.
 4. Keep responses under 80 words unless user asks for detail.
 5. Use Indian currency format (₹) always.
-6. Always respond in this exact JSON format (no extra text, no markdown):
-{
-  "reply": "your message here",
-  "action": "NAVIGATE_GOALS | NAVIGATE_SAVINGS | NAVIGATE_DASHBOARD | NAVIGATE_CARDS | null",
-  "actionData": {} 
-}`;
+6. RESPOND IN PLAIN TEXT ONLY. Do not use JSON format. Just reply with helpful text.`;
 
-async function callOllama(userPrompt) {
-  function parseOllamaJson(rawText) {
-    if (!rawText || typeof rawText !== "string") return null;
+async function callOllama(userPrompt, chatHistory = []) {
+  // Build messages string from history
+  let historyText = "";
+  if (chatHistory.length > 0) {
+    historyText = "\n\nCONVERSATION HISTORY (most recent last):\n";
+    chatHistory.forEach((msg) => {
+      const role = msg.role === "assistant" ? "FinAssist" : "User";
+      historyText += `${role}: ${msg.content}\n`;
+    });
+    historyText += "\nCurrent message:\n";
+  }
 
-    // allow response with extra text around JSON and also strict JSON body
-    const jsonMatch = rawText.match(/\{[\s\S]*\}/);
-    const candidate = jsonMatch ? jsonMatch[0] : rawText.trim();
-
-    try {
-      const parsed = JSON.parse(candidate);
-      if (typeof parsed !== "object" || parsed === null) return null;
-      return parsed;
-    } catch (parseErr) {
-      return null;
-    }
+  function parseOllamaResponse(rawText) {
+    // Simply accept the raw text as the reply
+    // The response is already in plain text format
+    return {
+      reply: (rawText || "").trim(),
+      action: null,
+      actionData: {},
+    };
   }
 
   try {
@@ -41,7 +41,7 @@ async function callOllama(userPrompt) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         model: process.env.OLLAMA_MODEL || "mistral",
-        prompt: SYSTEM_PROMPT + "\n\n" + userPrompt,
+        prompt: SYSTEM_PROMPT + historyText + "\n\n" + userPrompt,
         stream: false,
       }),
     });
@@ -53,26 +53,16 @@ async function callOllama(userPrompt) {
     const data = await response.json();
     const raw = data.response || "";
 
-    const parsed = parseOllamaJson(raw);
-    if (!parsed || !parsed.reply) {
-      console.warn(
-        "Ollama returned malformed JSON, falling back to plain text reply:",
-        raw,
-      );
+    const parsed = parseOllamaResponse(raw);
+    if (!parsed.reply) {
       return {
-        reply:
-          raw.trim() ||
-          "Sorry, I could not interpret the assistant response. Please try again.",
+        reply: "I'm thinking... please try again.",
         action: null,
         actionData: {},
       };
     }
 
-    return {
-      reply: parsed.reply || "",
-      action: parsed.action || null,
-      actionData: parsed.actionData || {},
-    };
+    return parsed;
   } catch (err) {
     console.error("Ollama error:", err.message);
     return {

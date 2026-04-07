@@ -21,6 +21,10 @@ export default function Chat() {
   const [histLoaded, setHistLoaded] = useState(false);
   const bottomRef = useRef(null);
 
+  const [isListening, setIsListening] = useState(false);
+  const [imageLoading, setImageLoading] = useState(false);
+  const fileInputRef = useRef(null);
+
   // Load chat history on mount
   useEffect(() => {
     async function loadHistory() {
@@ -34,7 +38,7 @@ export default function Chat() {
           setMessages([
             {
               role: "bot",
-              text: 'Hi! I\'m FinMind AI 👋 I can help you track expenses, savings, and goals. Try typing something like *"Spent ₹200 on food"* or *"How am I doing?"*',
+              text: 'Hi! I\'m FinAssist AI 👋 I can help you track expenses, savings, and goals. Try typing something like "Spent ₹200 on food" or "How am I doing?"',
             },
           ]);
         }
@@ -42,7 +46,7 @@ export default function Chat() {
         setMessages([
           {
             role: "bot",
-            text: "Hi! I'm FinMind AI 👋 Start by telling me about your expenses or savings!",
+            text: "Hi! I'm FinAssist AI 👋 Start by telling me about your expenses or savings!",
           },
         ]);
       }
@@ -74,16 +78,38 @@ export default function Chat() {
       ]);
 
       // Handle navigation actions
-      if (data.action === "NAVIGATE_GOALS")
-        setTimeout(() => navigate("/goals"), 1800);
-      if (data.action === "NAVIGATE_SAVINGS")
-        setTimeout(() => navigate("/savings"), 1800);
-      if (data.action === "NAVIGATE_EXPENSES")
-        setTimeout(() => navigate("/expenses"), 1800);
-      if (data.action === "NAVIGATE_DASHBOARD")
-        setTimeout(() => navigate("/dashboard"), 1800);
-      if (data.action === "NAVIGATE_CARDS")
-        setTimeout(() => navigate("/cards"), 1800);
+      const navigationActions = [
+        "NAVIGATE_GOALS",
+        "NAVIGATE_SAVINGS",
+        "NAVIGATE_EXPENSES",
+        "NAVIGATE_DASHBOARD",
+        "NAVIGATE_CARDS",
+      ];
+
+      if (navigationActions.includes(data.action)) {
+        // Store last 2 messages for floating chat
+        const lastMessages = [
+          { role: "user", text: msg },
+          { role: "bot", text: data.reply },
+        ];
+        localStorage.setItem(
+          "finassist_float_chat",
+          JSON.stringify({
+            userId,
+            messages: lastMessages,
+            timestamp: Date.now(),
+          }),
+        );
+
+        const routeMap = {
+          NAVIGATE_GOALS: "/goals",
+          NAVIGATE_SAVINGS: "/savings",
+          NAVIGATE_EXPENSES: "/expenses",
+          NAVIGATE_DASHBOARD: "/dashboard",
+          NAVIGATE_CARDS: "/cards",
+        };
+        setTimeout(() => navigate(routeMap[data.action]), 1800);
+      }
     } catch (err) {
       setMessages((prev) => [
         ...prev,
@@ -102,6 +128,56 @@ export default function Chat() {
       e.preventDefault();
       sendMessage();
     }
+  }
+
+  function startVoice() {
+    const SpeechRecognition =
+      window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      alert("Voice not supported in this browser");
+      return;
+    }
+    const recognition = new SpeechRecognition();
+    recognition.lang = "en-IN";
+    recognition.continuous = false;
+    recognition.interimResults = false;
+
+    recognition.onstart = () => setIsListening(true);
+    recognition.onend = () => setIsListening(false);
+    recognition.onerror = () => {
+      setIsListening(false);
+      alert("Voice not supported in this browser");
+    };
+    recognition.onresult = (event) => {
+      const transcript = event.results[0][0].transcript;
+      setInput(transcript);
+    };
+    recognition.start();
+  }
+
+  async function handleImageUpload(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    setImageLoading(true);
+
+    const reader = new FileReader();
+    reader.onload = async () => {
+      const base64 = reader.result.split(",")[1];
+      const mimeType = file.type;
+      try {
+        const { data } = await api.post("/chatbot/read-image", {
+          userId,
+          imageBase64: base64,
+          mimeType,
+        });
+        setInput(data.extractedText);
+      } catch {
+        alert("Could not read image. Try again.");
+      } finally {
+        setImageLoading(false);
+      }
+    };
+    reader.readAsDataURL(file);
   }
 
   return (
@@ -350,6 +426,55 @@ export default function Chat() {
             flex: 1,
           }}
         />
+
+        {/* Hidden file input */}
+        <input
+          type="file"
+          accept="image/*"
+          ref={fileInputRef}
+          style={{ display: "none" }}
+          onChange={handleImageUpload}
+        />
+
+        {/* Mic button */}
+        <button
+          onClick={startVoice}
+          style={{
+            width: 40,
+            height: 40,
+            borderRadius: 12,
+            border: "1px solid var(--border)",
+            background: isListening ? "rgba(239,68,68,0.2)" : "transparent",
+            color: isListening ? "#ef4444" : "var(--text-muted)",
+            cursor: "pointer",
+            fontSize: 18,
+            flexShrink: 0,
+            animation: isListening ? "pulse 1s infinite" : "none",
+          }}
+        >
+          🎤
+        </button>
+
+        {/* Camera button */}
+        <button
+          onClick={() => fileInputRef.current?.click()}
+          disabled={imageLoading}
+          style={{
+            width: 40,
+            height: 40,
+            borderRadius: 12,
+            border: "1px solid var(--border)",
+            background: "transparent",
+            color: "var(--text-muted)",
+            cursor: "pointer",
+            fontSize: 18,
+            flexShrink: 0,
+            opacity: imageLoading ? 0.5 : 1,
+          }}
+        >
+          {imageLoading ? "⏳" : "📷"}
+        </button>
+
         <button
           onClick={() => sendMessage()}
           disabled={loading || !input.trim()}
@@ -368,6 +493,10 @@ export default function Chat() {
         @keyframes bounce {
           0%, 80%, 100% { transform: translateY(0); }
           40% { transform: translateY(-6px); }
+        }
+        @keyframes pulse {
+          0%, 100% { opacity: 1; }
+          50% { opacity: 0.4; }
         }
       `}</style>
     </div>

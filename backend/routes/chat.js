@@ -25,8 +25,9 @@ router.post("/save", async (req, res) => {
 router.get("/history/:userId", async (req, res) => {
   try {
     const history = await ChatHistory.find({ userId: req.params.userId })
-      .sort({ timestamp: 1 })
-      .limit(100);
+      .sort({ timestamp: -1 })
+      .limit(100)
+      .then((msgs) => msgs.reverse()); // Reverse to get chronological order for display
     res.json({ history });
   } catch (err) {
     res.status(500).json({ error: err.message });

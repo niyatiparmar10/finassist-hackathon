@@ -30,6 +30,7 @@ function extractAmount(text) {
     /(\d+(?:,\d{3})*(?:\.\d+)?)\s*\/-?/i,
     /(\d+(?:\.\d+)?)\s*k\b/i, // 2k = 2000
     /(\d+(?:\.\d+)?)\s*lakh/i, // 2 lakh = 200000
+    /\b(\d+(?:,\d{3})*(?:\.\d+)?)\b(?!\s*(?:th|st|nd|rd|%))/i, // fallback for bare numbers
   ];
 
   for (const pattern of patterns) {
@@ -204,15 +205,12 @@ function extractExplicitMonth(text) {
   for (const [name, month] of Object.entries(MONTHS)) {
     const regex = new RegExp(`\\b${name}\\b`, "i");
     if (regex.test(lower)) {
-      const yearMatch = lower.match(/(20\d{2})/); // e.g. 2024
+      // Only match 4-digit years 2020-2099, NOT amounts like 2000, 5000
+      const yearMatch = lower.match(/\b(20[2-9]\d)\b/);
       const year = yearMatch
         ? parseInt(yearMatch[1], 10)
         : new Date().getFullYear();
-      // if requested month is in future relative to current month, assume previous year
-      const now = new Date();
-      if (month > now.getMonth() && year === now.getFullYear()) {
-        return { period: "explicit", month, year: year - 1 };
-      }
+      // Explicit month should be taken as-is, no decrement logic
       return { period: "explicit", month, year };
     }
   }
@@ -221,13 +219,50 @@ function extractExplicitMonth(text) {
 
 function extractTimeframe(text) {
   const lower = text.toLowerCase();
-
-  // if both appear, prefer explicit current month reference
   const hasCurrent = /this month|current month/i.test(lower);
   const hasLast = /last month|previous month|past month/i.test(lower);
-
   if (hasCurrent) return "current";
   if (hasLast) return "last";
+  return null;
+}
+
+function looksLikeReceiptExtraction(text) {
+  const lower = text.toLowerCase();
+  return (
+    /receipt|merchant|gst|cgst|sgst|subtotal|total amount due|amount incl|amount paid|grand total/.test(
+      lower,
+    ) &&
+    /amount/i.test(lower) &&
+    /category/i.test(lower)
+  );
+}
+
+function extractReceiptTotal(text) {
+  const lines = text.split(/\r?\n/).map((line) => line.trim());
+  const totalPatterns = [
+    /amount\s+incl/i,
+    /total\s+amount\s+due/i,
+    /amount\s+paid/i,
+    /grand\s+total/i,
+    /net\s+amount/i,
+    /total\s+billed/i,
+    /total\s+bill/i,
+  ];
+
+  for (const line of lines) {
+    if (totalPatterns.some((pattern) => pattern.test(line))) {
+      const amount = extractAmount(line);
+      if (amount) return amount;
+    }
+  }
+
+  const fallbackLine = lines.find(
+    (line) =>
+      /\*\*AMOUNT:\*\*/i.test(line) &&
+      /total|amount incl|amount paid|all taxes/i.test(line),
+  );
+  if (fallbackLine) return extractAmount(fallbackLine);
+
   return null;
 }
 
@@ -249,6 +284,23 @@ function detectIntent(message) {
       : {}),
   };
 
+  if (looksLikeReceiptExtraction(message)) {
+    const receiptTotal = extractReceiptTotal(message);
+    if (receiptTotal) {
+      const category = extractCategory(message);
+      return {
+        intent: INTENTS.ADD_EXPENSE,
+        amount: receiptTotal,
+        category: category === "other" ? "food" : category,
+        description: message,
+        date: extractDate(message),
+        rawMessage: message,
+        lowConfidence: true,
+        ...periodData,
+      };
+    }
+  }
+
   // UPDATE_INCOME
   if (
     /my salary is|i earn|income is|my income|salary is|i get paid|monthly income|annual salary/i.test(
@@ -264,7 +316,10 @@ function detectIntent(message) {
 
   // EXPLAIN_CONCEPT — must be before all SIMULATE checks
   if (
-    /what is|explain|how does.*work|tell me about|define|what are|difference between|how to calculate|what do you mean by|basics of/i.test(lower)
+    /what is|explain|how does.*work|tell me about|define|what are|difference between|how to calculate|what do you mean by|basics of/i.test(
+      lower,
+    ) &&
+    !/\b(my|i|me)\b/i.test(lower)
   ) {
     return {
       intent: INTENTS.EXPLAIN_CONCEPT,
@@ -302,7 +357,7 @@ function detectIntent(message) {
     };
   }
 
-  // SIMULATE_EXPENSE_CUT (Check BEFORE ADD_EXPENSE to avoid "spending" keyword collision)
+  // SIMULATE_EXPENSE_CUT — before ADD_EXPENSE to avoid collision
   if (
     /if i cut|if i reduce|if i stop spending|what if i cut|reduce.*spending|cut.*spending/i.test(
       lower,
@@ -371,31 +426,31 @@ function detectIntent(message) {
     };
   }
 
-  // ADD_EXPENSE
+  // CREATE_GOAL — FIXED: added "create a goal", "set a goal", "want to create"
   if (
-    /spent|paid|bought|ordered|purchased|cost me|expense of|\bbill\b|charged|deducted|used|paid for/i.test(
+    /want to save|plan to save|create a goal|set a goal|want to create.*goal|i want.*goal|\bsave\b.*for|\bsaving\b.*for|goal for|planning to buy|target of/i.test(
       lower,
     )
   ) {
-    return {
-      intent: INTENTS.ADD_EXPENSE,
-      amount: extractAmount(message),
-      category: extractCategory(message),
-      description: message,
-      date: extractDate(message),
-      ...periodData,
-    };
-  }
-
-  // CREATE_GOAL
-  if (
-    /want to save for|goal for|saving for a|save for|planning to buy|target of/i.test(
-      lower,
-    )
-  ) {
+    // Only set deadline if user explicitly said 'by' a month
+    let goalDeadline = null;
+    const byMatch = lower.match(
+      /by\s+(january|february|march|april|may|june|july|august|september|october|november|december)/i,
+    );
+    if (byMatch) {
+      const deadlineMonth = MONTHS[byMatch[1].toLowerCase()];
+      const now2 = new Date();
+      let deadlineYear = now2.getFullYear();
+      // If that month has already passed this year, use next year
+      if (deadlineMonth <= now2.getMonth()) {
+        deadlineYear += 1;
+      }
+      goalDeadline = new Date(deadlineYear, deadlineMonth, 28);
+    }
     return {
       intent: INTENTS.CREATE_GOAL,
       amount: extractAmount(message),
+      date: goalDeadline,
       rawMessage: message,
       ...periodData,
     };
@@ -417,7 +472,7 @@ function detectIntent(message) {
 
   // GET_INSIGHTS
   if (
-    /how am i doing|how did i do|show me|my spending|financial summary|spending report|my finances|breakdown|where did my money go|how have i been spending|tell me about my money/i.test(
+    /how am i doing|how did i do|show me|my spending|my savings|my expenses|total savings|total expenses|financial summary|spending report|my finances|breakdown|where did my money go|how much did i|how have i been spending|tell me about my money/i.test(
       lower,
     )
   ) {

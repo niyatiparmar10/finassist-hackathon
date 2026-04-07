@@ -17,8 +17,25 @@ router.post("/message", async (req, res) => {
     return res.status(400).json({ error: "userId and message required" });
 
   try {
-    const detected = detectIntent(message);
+    // ── Fetch last 10 messages for session context (INSIDE try block) ──
+    const recentHistory = await ChatHistory.find({ userId })
+      .sort({ timestamp: -1 })
+      .limit(10)
+      .lean();
+
+    const chatHistory = recentHistory.reverse().map((h) => ({
+      role: h.role === "bot" ? "assistant" : "user",
+      content: h.message,
+    }));
+
+    // ── Use the full user message for intent detection.
+    // Receipt extractions often start with a generic header line,
+    // so the first line alone is not reliable.
+    const intentMessage = message;
+
+    const detected = detectIntent(intentMessage);
     console.log("INTENT DEBUG:", detected);
+
     let contextForOllama = "";
     let savedData = null;
     let intent = detected.intent;
@@ -67,22 +84,26 @@ Monthly income: ₹${profile.monthly_income}. Monthly surplus: ₹${profile.mont
         });
         savedData = saving;
         responseAction = "NAVIGATE_SAVINGS";
-        contextForOllama = `User saved ₹${detected.amount}. Note: "${message}". Encourage them briefly.`;
+        const updatedProfile = await buildFinancialProfile(userId);
+        contextForOllama = `User saved ₹${detected.amount}. Note: "${message}". Their total savings this month is now ₹${updatedProfile.monthly_saved}. Encourage them briefly and mention this new total explicitly without inventing numbers.`;
       }
     } else if (intent === INTENTS.CREATE_GOAL) {
       const profile = await buildFinancialProfile(userId);
       const amount = detected.amount;
       const deadline = detected.date ? new Date(detected.date) : null;
+
       if (!amount) {
         contextForOllama = `User told the chatbot they want to create a goal but did not give a number. Ask: how much do they want to save, and by when?`;
       } else {
-        const actualDeadline =
-          deadline ||
-          (() => {
-            const d = new Date();
-            d.setMonth(d.getMonth() + 6);
-            return d;
-          })();
+        let actualDeadline = deadline;
+        let defaultUsed = false;
+        if (!actualDeadline) {
+          const d = new Date();
+          d.setMonth(d.getMonth() + 6);
+          actualDeadline = d;
+          defaultUsed = true;
+        }
+
         const monthsAvailable = Math.max(
           1,
           Math.ceil((actualDeadline - new Date()) / (1000 * 60 * 60 * 24 * 30)),
@@ -113,8 +134,15 @@ Monthly income: ₹${profile.monthly_income}. Monthly surplus: ₹${profile.mont
         responseAction = "NAVIGATE_GOALS";
         responseActionData = { goalId: goal._id, title };
 
-        contextForOllama = `FACTS: goal created - ${title} for ₹${amount} by ${actualDeadline.toLocaleDateString("en-IN", { month: "long", year: "numeric" })}. months=${monthsAvailable}, required=₹${requiredMonthly}/mo, surplus=₹${profile.monthly_surplus}, onTrack=${onTrack}.
-Confirm to user that goal is created and navigated to Goals page.`;
+        contextForOllama = `IMPORTANT: The goal of ₹${amount} for "${title}" by ${actualDeadline.toLocaleDateString("en-IN", { month: "long", year: "numeric" })} has been created successfully in the database.
+
+Tell the user in a friendly way that their goal has been created. Mention:
+- The exact amount: ₹${amount}
+- The title: ${title}
+- The deadline: ${actualDeadline.toLocaleDateString("en-IN", { month: "long", year: "numeric" })}
+- Required monthly saving: ₹${requiredMonthly}
+
+DO NOT hallucinate or change the amount. DO NOT change the year. Use EXACTLY ₹${amount}.`;
       }
     } else if (intent === INTENTS.GET_TOP_CATEGORY) {
       const profile = await buildFinancialProfile(userId, profilePeriod);
@@ -134,23 +162,19 @@ Confirm to user that goal is created and navigated to Goals page.`;
           year: "numeric",
         });
       } else {
-        const currentDate = new Date();
-        monthLabel = currentDate.toLocaleString("default", {
+        monthLabel = new Date().toLocaleString("default", {
           month: "long",
           year: "numeric",
         });
       }
 
       const topCategory = profile.top_category || "none";
-
       const replyText =
         topCategory === "none"
-          ? `I couldn't find any expenses for ${monthLabel}.` +
-            ` Try logging some spending first.`
-          : `Your top spending category for ${monthLabel} is ${topCategory},` +
-            ` with ₹${profile.category_breakdown[topCategory] || 0} spent.`;
+          ? `I couldn't find any expenses for ${monthLabel}. Try logging some spending first.`
+          : `Your top spending category for ${monthLabel} is ${topCategory}, with ₹${profile.category_breakdown[topCategory] || 0} spent.`;
 
-      // skip Ollama for deterministic fact answer
+      // Save to history then return — this was the bug (was returning without saving)
       await ChatHistory.create({ userId, role: "user", message, intent });
       await ChatHistory.create({
         userId,
@@ -185,8 +209,7 @@ Confirm to user that goal is created and navigated to Goals page.`;
           year: "numeric",
         });
       } else {
-        const currentDate = new Date();
-        monthLabel = currentDate.toLocaleString("default", {
+        monthLabel = new Date().toLocaleString("default", {
           month: "long",
           year: "numeric",
         });
@@ -205,7 +228,7 @@ User asked: "${message}"
 Give a friendly 3-4 sentence summary of how they are doing financially.`;
     } else if (intent === INTENTS.SIMULATE_EMI) {
       const profile = await buildFinancialProfile(userId);
-      responseAction = null; // No navigation for "what if" questions
+      responseAction = null;
       let simResult = null;
       try {
         const simRes = await fetch(`${SIMULATION_URL}/simulate/emi`, {
@@ -241,7 +264,7 @@ Give general advice about whether they should take an EMI based on their surplus
     } else if (intent === INTENTS.SIMULATE_INVESTMENT) {
       const profile = await buildFinancialProfile(userId);
       const amount = detected.amount || 1000;
-      responseAction = null; // No navigation for "what if" questions
+      responseAction = null;
       let simResult = null;
       try {
         const simRes = await fetch(`${SIMULATION_URL}/simulate/investment`, {
@@ -277,7 +300,7 @@ Give general advice on whether this SIP amount is feasible based on their surplu
       const profile = await buildFinancialProfile(userId);
       const cat = detected.category || profile.top_category;
       const catAmount = profile.category_breakdown[cat] || 0;
-      responseAction = null; // No navigation for "what if" questions
+      responseAction = null;
       let simResult = null;
       try {
         const simRes = await fetch(`${SIMULATION_URL}/simulate/expense-cut`, {
@@ -311,7 +334,7 @@ Give general advice on the impact of a 20% cut to this category.`;
       }
     } else if (intent === INTENTS.EXPLAIN_CONCEPT) {
       const profile = await buildFinancialProfile(userId);
-      responseAction = null; // No navigation for concept explanations
+      responseAction = null;
       contextForOllama = `User asked: "${message}"
 User type: ${profile.user_type}. Monthly income: ₹${profile.monthly_income}.
 Explain the concept in simple terms relevant to their financial situation.`;
@@ -346,8 +369,7 @@ User asked: "${message}". Summarize their goal progress briefly.`;
           year: "numeric",
         });
       } else {
-        const currentDate = new Date();
-        monthLabel = currentDate.toLocaleString("default", {
+        monthLabel = new Date().toLocaleString("default", {
           month: "long",
           year: "numeric",
         });
@@ -358,8 +380,29 @@ Their ${monthLabel} profile: ₹${profile.monthly_income} income, ₹${profile.m
 Respond helpfully. You can help them log expenses, savings, create goals, or answer financial questions.`;
     }
 
-    // Call Ollama
-    const ollamaResponse = await callOllama(contextForOllama);
+    // Call Ollama with chat history for session memory
+    const ollamaResponse = await callOllama(contextForOllama, chatHistory);
+
+    // SAFETY CHECK: If CREATE_GOAL, verify the reply contains the correct amount
+    if (intent === INTENTS.CREATE_GOAL && savedData) {
+      const correctAmount = savedData.targetAmount;
+      const replyHasCorrectAmount = new RegExp(
+        `₹${correctAmount}|Rs\\.?\\s*${correctAmount}`,
+      ).test(ollamaResponse.reply);
+      if (!replyHasCorrectAmount) {
+        console.warn(
+          `Ollama hallucinated wrong amount in CREATE_GOAL. Correcting response.`,
+        );
+        const deadline = savedData.deadline.toLocaleDateString("en-IN", {
+          month: "long",
+          year: "numeric",
+        });
+        ollamaResponse.reply = `Perfect! I've created your goal to save ₹${correctAmount} for ${savedData.title} by ${deadline}. You need to save ₹${savedData.monthlyContribution} each month to stay on track. Let's get started!`;
+      }
+    }
+
+    const finalAction = responseAction || ollamaResponse.action;
+    const finalActionData = responseActionData || ollamaResponse.actionData;
 
     // Save both messages to chat history
     await ChatHistory.create({ userId, role: "user", message, intent });
@@ -368,11 +411,8 @@ Respond helpfully. You can help them log expenses, savings, create goals, or ans
       role: "bot",
       message: ollamaResponse.reply,
       intent,
-      action: ollamaResponse.action,
+      action: finalAction,
     });
-
-    const finalAction = responseAction || ollamaResponse.action;
-    const finalActionData = responseActionData || ollamaResponse.actionData;
 
     res.json({
       reply: ollamaResponse.reply,
@@ -395,7 +435,6 @@ router.post("/reels", async (req, res) => {
   try {
     const profile = await buildFinancialProfile(userId);
 
-    // Try Ollama first
     const prompt = `You are a financial advisor generating personalized "reel" cards for a user.
 
 USER PROFILE (use ONLY these real numbers):
@@ -442,7 +481,7 @@ Rules: every card must mention at least one real number. No generic advice. Vary
         const hasCore = reels.some((r) =>
           requiredCategories.has((r.category || "").toLowerCase()),
         );
-        if (Array.isArray(reels) && reels.length >= 6 && hasCore) {
+        if (Array.isArray(reels) && reels.length >= 5 && hasCore) {
           return res.json({ reels });
         }
       } catch (parseErr) {
@@ -450,7 +489,7 @@ Rules: every card must mention at least one real number. No generic advice. Vary
       }
     }
 
-    // Fallback to rule-based generation (explicit categories as requested)
+    // Fallback rule-based reels
     const inc = profile.monthly_income || 0;
     const spend = profile.monthly_spend || 0;
     const surplus = profile.monthly_surplus || 0;
@@ -529,8 +568,8 @@ Rules: every card must mention at least one real number. No generic advice. Vary
         id: "f6",
         category: "debt",
         title: "Reduce debt risk and keep options open",
-        hook: `If you have existing liabilities, keeping a safe cushion from your ₹${surplus.toLocaleString("en-IN")} surplus shields you from emergencies and stops high-cost debt from building up.`,
-        insight: `Even a small portion of your surplus (₹${Math.round(surplus * 0.2).toLocaleString("en-IN")}/month) can reduce your interest burden and improve your credit profile, which supports smart investments later.`,
+        hook: `If you have existing liabilities, keeping a safe cushion from your ₹${surplus.toLocaleString("en-IN")} surplus shields you from emergencies.`,
+        insight: `Even a small portion of your surplus (₹${Math.round(surplus * 0.2).toLocaleString("en-IN")}/month) can reduce your interest burden and improve your credit profile.`,
         action:
           "Review high-interest liabilities and pay down the top 1-2 items first.",
         stat: "Debt safety plan",
@@ -541,6 +580,107 @@ Rules: every card must mention at least one real number. No generic advice. Vary
   } catch (err) {
     console.error("Reels generation error:", err);
     res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/chatbot/explain-reel
+router.post("/explain-reel", async (req, res) => {
+  const { userId, reelTitle, reelInsight, reelCategory, reelAction } = req.body;
+  if (!userId) return res.status(400).json({ error: "userId required" });
+
+  try {
+    const profile = await buildFinancialProfile(userId);
+    const prompt = `The user wants to understand this financial tip in depth:
+Title: ${reelTitle}
+Category: ${reelCategory}
+Insight: ${reelInsight}
+Action tip: ${reelAction}
+
+User's financial context:
+- Monthly income: ₹${profile.monthly_income}
+- Monthly spend: ₹${profile.monthly_spend}
+- Recommended surplus for advice: ₹${profile.recommended_surplus_for_advice}
+- Top spending category: ${profile.top_category}
+
+Explain this tip in detail in 4-5 sentences. Connect it directly to their actual numbers. Be conversational and friendly.`;
+
+    const response = await callOllama(prompt, []);
+
+    await ChatHistory.create({
+      userId,
+      role: "user",
+      message: `Explain reel: ${reelTitle}`,
+      intent: "EXPLAIN_REEL",
+    });
+    await ChatHistory.create({
+      userId,
+      role: "bot",
+      message: response.reply,
+      intent: "EXPLAIN_REEL",
+    });
+
+    res.json({ reply: response.reply, action: null });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/chatbot/read-image
+router.post("/read-image", async (req, res) => {
+  const { userId, imageBase64, mimeType } = req.body;
+  if (!userId || !imageBase64)
+    return res.status(400).json({ error: "Missing data" });
+
+  try {
+    const groqApiKey = process.env.GROQ_API_KEY;
+    if (!groqApiKey) {
+      return res.status(500).json({ error: "GROQ_API_KEY is missing in .env" });
+    }
+
+    const response = await fetch(
+      "https://api.groq.com/openai/v1/chat/completions",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${groqApiKey}`,
+        },
+        body: JSON.stringify({
+          model: "meta-llama/llama-4-scout-17b-16e-instruct",
+          messages: [
+            {
+              role: "user",
+              content: [
+                {
+                  type: "image_url",
+                  image_url: {
+                    url: `data:${mimeType || "image/jpeg"};base64,${imageBase64}`,
+                  },
+                },
+                {
+                  type: "text",
+                  text: "This is a financial document or receipt. Extract all relevant financial information: amounts, categories, dates, merchant names. Format as: AMOUNT: X, CATEGORY: Y, DATE: Z, NOTE: description.",
+                },
+              ],
+            },
+          ],
+        }),
+      },
+    );
+
+    if (!response.ok) {
+      const errData = await response.json().catch(() => ({}));
+      console.error("Groq Vision error:", errData);
+      throw new Error(`Groq API returned ${response.status}`);
+    }
+
+    const data = await response.json();
+    const extractedText = data.choices[0]?.message?.content || "";
+
+    res.json({ extractedText });
+  } catch (err) {
+    console.error("Image read error:", err);
+    res.status(500).json({ error: "Could not read image" });
   }
 });
 

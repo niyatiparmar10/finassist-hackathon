@@ -14,6 +14,7 @@ import Chat from "./pages/Chat";
 import Goals from "./pages/Goals";
 import Savings from "./pages/Savings";
 import Cards from "./pages/Cards";
+import FloatingChat from "./components/FloatingChat";
 
 // ── Nav items ────────────────────────────────────────────────
 const NAV = [
@@ -84,6 +85,7 @@ function AppShell({ children }) {
         <Sidebar />
         <main className="main-content">{children}</main>
       </div>
+      <FloatingChat />
     </>
   );
 }
