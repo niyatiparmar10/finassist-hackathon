@@ -7,12 +7,13 @@ const { Saving } = require("../models");
 // POST /api/savings/add
 router.post("/add", async (req, res) => {
   try {
-    const { userId, amount, note, linkedGoalId } = req.body;
+    const { userId, amount, note, linkedGoalId, source } = req.body;
     const saving = await Saving.create({
       userId,
       amount,
       note,
       linkedGoalId: linkedGoalId || null,
+      source: source || "chatbot",
     });
 
     // If linked to a goal, update goal's savedSoFar
@@ -27,7 +28,10 @@ router.post("/add", async (req, res) => {
     }
 
     // Calculate streak
-    const allSavings = await Saving.find({ userId }).sort({ date: -1 });
+    const allSavings = await Saving.find({ userId }).sort({
+      date: -1,
+      _id: -1,
+    });
     let streak = 0;
     const today = new Date();
     for (let i = 0; i < 365; i++) {
@@ -52,7 +56,7 @@ router.post("/add", async (req, res) => {
 router.get("/list/:userId", async (req, res) => {
   try {
     const { userId } = req.params;
-    const entries = await Saving.find({ userId }).sort({ date: -1 });
+    const entries = await Saving.find({ userId }).sort({ date: -1, _id: -1 });
     const totalSaved = entries.reduce((sum, s) => sum + s.amount, 0);
 
     const now = new Date();

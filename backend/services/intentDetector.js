@@ -357,6 +357,25 @@ function detectIntent(message) {
     };
   }
 
+  // ADD_EXPENSE
+  // Match common real-world logging phrases (spent/paid/bought etc.) with an amount.
+  if (
+    extractAmount(message) &&
+    /\b(spent|spend|paid|pay|bought|buy|expense|cost|bill|fare)\b/i.test(
+      lower,
+    ) &&
+    !/if i cut|if i reduce|what if/i.test(lower)
+  ) {
+    return {
+      intent: INTENTS.ADD_EXPENSE,
+      amount: extractAmount(message),
+      category: extractCategory(message),
+      description: message,
+      date: extractDate(message),
+      ...periodData,
+    };
+  }
+
   // SIMULATE_EXPENSE_CUT — before ADD_EXPENSE to avoid collision
   if (
     /if i cut|if i reduce|if i stop spending|what if i cut|reduce.*spending|cut.*spending/i.test(
@@ -504,7 +523,7 @@ function detectIntent(message) {
   // If has amount and financial verb, default to ADD_EXPENSE
   if (
     extractAmount(message) &&
-    /spend|pay|buy|cost|expense|save|invest/i.test(lower)
+    /spent|spend|paid|pay|bought|buy|cost|expense/i.test(lower)
   ) {
     return {
       intent: INTENTS.ADD_EXPENSE,

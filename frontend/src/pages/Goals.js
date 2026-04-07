@@ -1,5 +1,5 @@
-//Goals.js
-import React, { useEffect, useState } from "react";
+// frontend/src/pages/Goals.jsx
+import React, { useEffect, useState, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import api from "../api";
 
@@ -8,14 +8,75 @@ export default function Goals() {
   const navigate = useNavigate();
   const [goals, setGoals] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [depositForm, setDepositForm] = useState({}); // { goalId: amount }
+  const [depositLoading, setDepositLoading] = useState({});
+  const [depositToast, setDepositToast] = useState({});
+  const [openDepositId, setOpenDepositId] = useState(null);
+
+  const fetchGoals = useCallback(async () => {
+    console.log("[GOALS PAGE] Fetching goals");
+    try {
+      const res = await api.get(`/goals/${userId}`);
+      console.log(`[GOALS PAGE] Got ${res.data.goals?.length} goals`);
+      setGoals(res.data.goals || []);
+    } catch (err) {
+      console.error("[GOALS PAGE] Fetch error:", err);
+    } finally {
+      setLoading(false);
+    }
+  }, [userId]);
 
   useEffect(() => {
-    api
-      .get(`/goals/${userId}`)
-      .then((r) => setGoals(r.data.goals || []))
-      .catch(console.error)
-      .finally(() => setLoading(false));
-  }, [userId]);
+    fetchGoals();
+  }, [fetchGoals]);
+
+  async function handleDeposit(goal) {
+    const amount = parseFloat(depositForm[goal._id]);
+    if (!amount || amount <= 0) {
+      setDepositToast({
+        ...depositToast,
+        [goal._id]: { msg: "Enter a valid amount", type: "error" },
+      });
+      return;
+    }
+
+    console.log(
+      `[GOALS PAGE] Depositing ₹${amount} to goal: ${goal.title} (${goal._id})`,
+    );
+    setDepositLoading({ ...depositLoading, [goal._id]: true });
+
+    try {
+      // Add to savings with goal link; backend also updates goal progress.
+      await api.post("/savings/add", {
+        userId,
+        amount,
+        note: `Goal deposit: ${goal.title}`,
+        linkedGoalId: goal._id,
+        source: "manual",
+      });
+      console.log(`[GOALS PAGE] Saving added with linkedGoalId=${goal._id}`);
+
+      setDepositToast({
+        ...depositToast,
+        [goal._id]: { msg: `✓ ₹${amount} added!`, type: "success" },
+      });
+      setDepositForm({ ...depositForm, [goal._id]: "" });
+      setOpenDepositId(null);
+      fetchGoals();
+      setTimeout(
+        () => setDepositToast((t) => ({ ...t, [goal._id]: null })),
+        3000,
+      );
+    } catch (err) {
+      console.error(`[GOALS PAGE] Deposit error for goal ${goal._id}:`, err);
+      setDepositToast({
+        ...depositToast,
+        [goal._id]: { msg: "Failed. Try again.", type: "error" },
+      });
+    } finally {
+      setDepositLoading({ ...depositLoading, [goal._id]: false });
+    }
+  }
 
   if (loading)
     return (
@@ -39,7 +100,7 @@ export default function Goals() {
         <div>
           <h1 className="page-title">Goals</h1>
           <p className="page-subtitle">
-            Track your savings goals — create them by chatting with FinMind AI
+            Track your savings goals and add money to them directly
           </p>
         </div>
         <button
@@ -70,7 +131,7 @@ export default function Goals() {
             Go to AI Chat and type something like
             <br />
             <em style={{ color: "var(--green)" }}>
-              "I want to save ₹10,000 for a Goa trip by December"
+              "I want to save ₹10,000 for a Goa trip by June"
             </em>
           </p>
           <button className="btn-primary" onClick={() => navigate("/chat")}>
@@ -82,13 +143,16 @@ export default function Goals() {
           {goals.map((goal, i) => {
             const pct = Math.min(100, goal.progress || 0);
             const isComplete = goal.status === "completed";
+            const toast = depositToast[goal._id];
+            const isDepositOpen = openDepositId === goal._id;
+
             return (
               <div
                 key={goal._id}
                 className={`card fade-up fade-up-${i + 1}`}
                 style={{ position: "relative", overflow: "hidden" }}
               >
-                {/* Glow line top */}
+                {/* Top glow line */}
                 <div
                   style={{
                     position: "absolute",
@@ -190,7 +254,7 @@ export default function Goals() {
                   </div>
                 </div>
 
-                {/* Monthly contribution */}
+                {/* Monthly contribution badge */}
                 {goal.monthlyContribution > 0 && (
                   <div
                     style={{
@@ -203,10 +267,114 @@ export default function Goals() {
                       padding: "6px 12px",
                       fontSize: 13,
                       color: "var(--purple)",
+                      marginBottom: 12,
                     }}
                   >
                     ◈ Save ₹{goal.monthlyContribution?.toLocaleString("en-IN")}
                     /month to stay on track
+                  </div>
+                )}
+
+                {/* Add Money button + inline form */}
+                {!isComplete && (
+                  <div style={{ marginTop: 8 }}>
+                    {!isDepositOpen ? (
+                      <button
+                        onClick={() => setOpenDepositId(goal._id)}
+                        className="btn-primary"
+                        style={{ padding: "8px 20px", fontSize: 13 }}
+                      >
+                        + Add Money
+                      </button>
+                    ) : (
+                      <div
+                        style={{
+                          marginTop: 4,
+                          padding: 16,
+                          borderRadius: 12,
+                          background: "rgba(255,255,255,0.03)",
+                          border: "1px solid var(--border)",
+                        }}
+                      >
+                        <div
+                          style={{
+                            fontSize: 13,
+                            color: "var(--text-muted)",
+                            marginBottom: 10,
+                          }}
+                        >
+                          Add money towards{" "}
+                          <strong style={{ color: "var(--text-primary)" }}>
+                            {goal.title}
+                          </strong>
+                        </div>
+                        <div
+                          style={{
+                            display: "flex",
+                            gap: 10,
+                            alignItems: "center",
+                          }}
+                        >
+                          <input
+                            className="input"
+                            type="number"
+                            min="1"
+                            placeholder="Amount (₹)"
+                            value={depositForm[goal._id] || ""}
+                            onChange={(e) =>
+                              setDepositForm({
+                                ...depositForm,
+                                [goal._id]: e.target.value,
+                              })
+                            }
+                            style={{ flex: 1 }}
+                          />
+                          <button
+                            onClick={() => handleDeposit(goal)}
+                            className="btn-primary"
+                            disabled={depositLoading[goal._id]}
+                            style={{ padding: "10px 20px", flexShrink: 0 }}
+                          >
+                            {depositLoading[goal._id] ? "Saving..." : "Save"}
+                          </button>
+                          <button
+                            onClick={() => setOpenDepositId(null)}
+                            style={{
+                              padding: "10px 14px",
+                              borderRadius: 10,
+                              border: "1px solid var(--border)",
+                              background: "transparent",
+                              color: "var(--text-muted)",
+                              cursor: "pointer",
+                              fontSize: 13,
+                            }}
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                        {toast && (
+                          <div
+                            style={{
+                              marginTop: 10,
+                              padding: "8px 12px",
+                              borderRadius: 8,
+                              fontSize: 13,
+                              background:
+                                toast.type === "success"
+                                  ? "var(--green-dim)"
+                                  : "rgba(239,68,68,0.08)",
+                              color:
+                                toast.type === "success"
+                                  ? "var(--green)"
+                                  : "#f87171",
+                              border: `1px solid ${toast.type === "success" ? "rgba(0,229,160,0.2)" : "rgba(239,68,68,0.2)"}`,
+                            }}
+                          >
+                            {toast.msg}
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
                 )}
               </div>

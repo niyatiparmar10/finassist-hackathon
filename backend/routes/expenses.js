@@ -6,13 +6,14 @@ const { Expense } = require("../models");
 // POST /api/expenses/add
 router.post("/add", async (req, res) => {
   try {
-    const { userId, amount, category, description, date } = req.body;
+    const { userId, amount, category, description, date, source } = req.body;
     const expense = await Expense.create({
       userId,
       amount,
       category,
       description,
       date: date || new Date(),
+      source: source || "chatbot",
     });
 
     // Return updated category totals for this month
@@ -101,10 +102,67 @@ router.get("/monthly/:userId", async (req, res) => {
 router.get("/all/:userId", async (req, res) => {
   try {
     const expenses = await Expense.find({ userId: req.params.userId })
-      .sort({ date: -1 })
+      .sort({ _id: -1 })
       .limit(50);
     res.json({ expenses });
   } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/expenses/by-month/:userId?year=2026&month=3
+router.get("/by-month/:userId", async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const year = parseInt(req.query.year);
+    const month = parseInt(req.query.month); // 0-indexed
+
+    console.log(
+      `[EXPENSES] by-month request: userId=${userId} year=${year} month=${month}`,
+    );
+
+    if (isNaN(year) || isNaN(month)) {
+      return res
+        .status(400)
+        .json({ error: "year and month query params required" });
+    }
+
+    const start = new Date(year, month, 1);
+    const end = new Date(year, month + 1, 1);
+
+    console.log(
+      `[EXPENSES] date range: ${start.toISOString()} to ${end.toISOString()}`,
+    );
+
+    const expenses = await Expense.find({
+      userId,
+      date: { $gte: start, $lt: end },
+    }).sort({ _id: -1 });
+
+    const breakdown = {};
+    let total = 0;
+    for (const e of expenses) {
+      breakdown[e.category] = (breakdown[e.category] || 0) + e.amount;
+      total += e.amount;
+    }
+
+    const topCategory = Object.entries(breakdown).sort(
+      (a, b) => b[1] - a[1],
+    )[0];
+
+    console.log(
+      `[EXPENSES] found ${expenses.length} expenses, total=₹${total}`,
+    );
+
+    res.json({
+      expenses,
+      total,
+      breakdown,
+      topCategory: topCategory?.[0] || "none",
+      topAmount: topCategory?.[1] || 0,
+    });
+  } catch (err) {
+    console.error("[EXPENSES] by-month error:", err);
     res.status(500).json({ error: err.message });
   }
 });

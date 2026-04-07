@@ -41,6 +41,7 @@ router.post("/message", async (req, res) => {
     let intent = detected.intent;
     let responseAction = null;
     let responseActionData = null;
+    let directReply = null;
 
     const profilePeriod =
       detected.period === "explicit"
@@ -66,14 +67,13 @@ router.post("/message", async (req, res) => {
           category: detected.category || "other",
           description: detected.description || message,
           date: detected.date || new Date(),
+          source: "chatbot",
         });
         savedData = expense;
         responseAction = "NAVIGATE_EXPENSES";
         const profile = await buildFinancialProfile(userId);
-        contextForOllama = `User logged ₹${detected.amount} expense under ${detected.category || "other"}.
-Current month total spending: ₹${profile.monthly_spend}.
-Top category: ${profile.top_category} (${profile.top_percent}% of income).
-Monthly income: ₹${profile.monthly_income}. Monthly surplus: ₹${profile.monthly_surplus}.`;
+        const category = detected.category || "other";
+        directReply = `Logged ₹${detected.amount.toLocaleString("en-IN")} under ${category}. This month total spend is now ₹${profile.monthly_spend.toLocaleString("en-IN")}.`;
       }
     } else if (intent === INTENTS.ADD_SAVING) {
       if (detected.amount) {
@@ -81,11 +81,12 @@ Monthly income: ₹${profile.monthly_income}. Monthly surplus: ₹${profile.mont
           userId,
           amount: detected.amount,
           note: message,
+          source: "chatbot",
         });
         savedData = saving;
         responseAction = "NAVIGATE_SAVINGS";
         const updatedProfile = await buildFinancialProfile(userId);
-        contextForOllama = `User saved ₹${detected.amount}. Note: "${message}". Their total savings this month is now ₹${updatedProfile.monthly_saved}. Encourage them briefly and mention this new total explicitly without inventing numbers.`;
+        directReply = `Saved ₹${detected.amount.toLocaleString("en-IN")}. This month total savings is now ₹${updatedProfile.monthly_saved.toLocaleString("en-IN")}.`;
       }
     } else if (intent === INTENTS.CREATE_GOAL) {
       const profile = await buildFinancialProfile(userId);
@@ -501,11 +502,15 @@ Their ${monthLabel} profile: ₹${profile.monthly_income} income, ₹${profile.m
 Respond helpfully. You can help them log expenses, savings, create goals, or answer financial questions.`;
     }
 
-    // Call Ollama with chat history for session memory
-    const ollamaResponse = await callOllama(contextForOllama, chatHistory);
+    let ollamaResponse = null;
+
+    // For transactional logging intents, avoid LLM arithmetic hallucinations.
+    if (!directReply) {
+      ollamaResponse = await callOllama(contextForOllama, chatHistory);
+    }
 
     // SAFETY CHECK: If CREATE_GOAL, verify the reply contains the correct amount
-    if (intent === INTENTS.CREATE_GOAL && savedData) {
+    if (intent === INTENTS.CREATE_GOAL && savedData && ollamaResponse) {
       const correctAmount = savedData.targetAmount;
       const replyHasCorrectAmount = new RegExp(
         `₹${correctAmount}|Rs\\.?\\s*${correctAmount}`,
@@ -522,21 +527,23 @@ Respond helpfully. You can help them log expenses, savings, create goals, or ans
       }
     }
 
-    const finalAction = responseAction || ollamaResponse.action;
-    const finalActionData = responseActionData || ollamaResponse.actionData;
+    const finalReply = directReply || ollamaResponse?.reply || "Done.";
+    const finalAction = responseAction || ollamaResponse?.action || null;
+    const finalActionData =
+      responseActionData || ollamaResponse?.actionData || null;
 
     // Save both messages to chat history
     await ChatHistory.create({ userId, role: "user", message, intent });
     await ChatHistory.create({
       userId,
       role: "bot",
-      message: ollamaResponse.reply,
+      message: finalReply,
       intent,
       action: finalAction,
     });
 
     res.json({
-      reply: ollamaResponse.reply,
+      reply: finalReply,
       action: finalAction,
       actionData: finalActionData,
       intent,
